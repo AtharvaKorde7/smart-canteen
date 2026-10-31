@@ -1,0 +1,42 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Datasets and archives
+data/
+dataset*
+*.zip
+indian_raw/
+food-101/
+own_raw/
+
+# Python cache & temporary build files
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# User feedback collected photos
+feedback/
+!feedback/.gitkeep
+
+# Model weights and exports
+models/*.pth
+models/*.onnx
+app/model/*.onnx
+*.pt
+*.onnx
+
+# Application runtime outputs and screenshots
+outputs/
+
+# OS files
+.DS_Store
+Thumbs.db

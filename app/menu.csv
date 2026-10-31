@@ -1,0 +1,15 @@
+class,price,kcal
+masala_dosa,60,320
+idli,35,160
+chole_bhature,80,550
+pav_bhaji,70,450
+momos,50,280
+chai,15,80
+jalebi,40,300
+samosa,20,260
+pizza,120,680
+burger,65,420
+fried_rice,80,380
+vada_pav,25,290
+poha,30,220
+not_food,0,0

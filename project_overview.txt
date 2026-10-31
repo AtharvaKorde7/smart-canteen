@@ -1,0 +1,1562 @@
+===================================================
+PROJECT OVERVIEW: smart-canteen
+===================================================
+
+--- PROJECT FILE STRUCTURE ---
+smart-canteen/
+�
++-- app/
+�   +-- app.py
+�   +-- live_demo.py
+�   +-- predictor.py
+�   +-- menu.csv
+�
++-- feedback/
+�
++-- notebooks/
+�   +-- capstone_training.ipynb
+�
++-- scripts/
+�   +-- download_data_local.py
+�
++-- src/
+    +-- prepare_own_photos.py
+
+===================================================
+IMPORTANT CORE SOURCE CODES
+===================================================
+
+
+===================================================
+FILE: app/app.py
+===================================================
+
+"""
+Smart Canteen Billing Assistant: Food Image Recognition using Transfer Learning
+Streamlit Demo Web Application for Laptop
+
+Authors: Capstone Project Team (Ramdeobaba University)
+- Atharva Korde (Roll 08)
+- Dhruv Khedkar (Roll 13)
+- Divyam Sharma (Roll 14)
+- Divyatwa Kiranpure (Roll 15)
+"""
+
+import sys
+import os
+import json
+import time
+from datetime import datetime
+from pathlib import Path
+
+# Add app directory and project root to sys.path so app modules import cleanly
+APP_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = APP_DIR.parent
+for p in [str(APP_DIR), str(PROJECT_ROOT)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+from PIL import Image
+
+# Import shared prediction and utility functions
+try:
+    from predictor import (
+        FoodPredictor,
+        load_menu,
+        load_class_names,
+        compute_gradcam,
+        MODEL_DIR,
+        MENU_FILE,
+    )
+except ImportError:
+    from app.predictor import (
+        FoodPredictor,
+        load_menu,
+        load_class_names,
+        compute_gradcam,
+        MODEL_DIR,
+        MENU_FILE,
+    )
+
+# Optional WebRTC import for continuous live webcam streaming in browser
+try:
+    import av
+    import cv2
+    from streamlit_webrtc import (
+        webrtc_streamer,
+        VideoProcessorBase,
+        RTCConfiguration,
+        WebRtcMode,
+    )
+    WEBRTC_AVAILABLE = True
+except ImportError:
+    WEBRTC_AVAILABLE = False
+
+# ==============================================================================
+# CONFIGURATION & GLOBAL SETTINGS
+# ==============================================================================
+ACTIVE_MODEL_ARCH = "mobilenetv3"  # Default: "mobilenetv3" (or "efficientnet_b0")
+FEEDBACK_DIR = PROJECT_ROOT / "feedback"
+
+# Set Streamlit Page Config
+st.set_page_config(
+    page_title="Smart Canteen Assistant",
+    page_icon="🍽️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for modern, polished UI
+st.markdown("""
+<style>
+    .main-title {
+        font-size: 2.2rem;
+        font-weight: 700;
+        color: #1E3A8A;
+        margin-bottom: 0.2rem;
+    }
+    .sub-title {
+        font-size: 1.05rem;
+        color: #4B5563;
+        margin-bottom: 1.5rem;
+    }
+    .metric-card {
+        background-color: #F3F4F6;
+        padding: 1rem;
+        border-radius: 0.6rem;
+        border-left: 5px solid #2563EB;
+        margin-bottom: 1rem;
+    }
+    .receipt-box {
+        background-color: #FAFAFA;
+        border: 1px dashed #9CA3AF;
+        padding: 1.2rem;
+        border-radius: 0.6rem;
+    }
+    .alert-banner {
+        padding: 0.8rem 1rem;
+        border-radius: 0.5rem;
+        background-color: #FEF3C7;
+        color: #92400E;
+        font-weight: 500;
+        margin: 0.8rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ==============================================================================
+# CACHED PREDICTOR & DATA LOADERS
+# ==============================================================================
+@st.cache_data
+def get_cached_menu():
+    """Loads the 16-class canteen menu with prices (INR) and calories (kcal)."""
+    return load_menu(MENU_FILE)
+
+
+@st.cache_data
+def get_cached_classes():
+    """Loads the 16 class names."""
+    return load_class_names()
+
+
+@st.cache_resource
+def get_predictor_instance(arch_name: str, threshold: float):
+    """
+    Initializes and caches the FoodPredictor model instance.
+    Runs PyTorch inference on GPU if available, else CPU.
+    """
+    try:
+        predictor = FoodPredictor(
+            backend="torch",
+            arch_name=arch_name,
+            threshold=threshold,
+            window_size=10
+        )
+        return predictor, None
+    except Exception as e:
+        return None, str(e)
+
+
+# ==============================================================================
+# WEBRTC VIDEO PROCESSOR CLASS
+# ==============================================================================
+if WEBRTC_AVAILABLE:
+    class LiveFoodVideoProcessor(VideoProcessorBase):
+        """Processes continuous live frames from browser webcam using shared predictor."""
+
+        def __init__(self):
+            self.predictor = None
+            self.last_result = None
+            self.frame_count = 0
+
+        def set_predictor(self, predictor: FoodPredictor):
+            self.predictor = predictor
+
+        def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+            img = frame.to_ndarray(format="bgr24")
+            self.frame_count += 1
+            h, w = img.shape[:2]
+
+            # Center-crop coordinates
+            box_size = int(min(h, w) * 0.65)
+            x1 = (w - box_size) // 2
+            y1 = (h - box_size) // 2
+            x2 = x1 + box_size
+            y2 = y1 + box_size
+
+            # Predict every 3rd frame
+            if self.predictor is not None and (self.frame_count % 3 == 0 or self.last_result is None):
+                crop = img[y1:y2, x1:x2]
+                self.last_result = self.predictor.predict_cv2(crop, smooth=True)
+
+            # Draw visual HUD on frame
+            if self.last_result is not None:
+                res = self.last_result
+                if res["is_food"]:
+                    color = (0, 220, 0)  # Green
+                    text = f"{res['class_name']} ({res['confidence']*100:.1f}%)"
+                    sub_text = f"Rs. {res['price']}  |  {res['kcal']} kcal"
+                else:
+                    color = (0, 0, 230)  # Red
+                    text = "Unknown food"
+                    sub_text = "No food / Unknown food"
+
+                # Draw targeting box
+                cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(
+                    img, text, (x1, max(30, y1 - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA
+                )
+                cv2.putText(
+                    img, sub_text, (x1, y2 + 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 1, cv2.LINE_AA
+                )
+
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+
+# ==============================================================================
+# SESSION STATE INITIALIZATION (RUNNING BILL)
+# ==============================================================================
+if "bill_items" not in st.session_state:
+    st.session_state.bill_items = []
+
+
+def add_item_to_bill(dish_class: str, display_name: str, price: int, kcal: int):
+    """
+    Adds or increments an item in the running bill.
+    Safety rule: 'not_food' or price 0 items are NEVER added.
+    """
+    if dish_class == "not_food" or price <= 0:
+        return
+
+    for item in st.session_state.bill_items:
+        if item["class"] == dish_class:
+            item["qty"] += 1
+            item["total_price"] = item["qty"] * item["price"]
+            item["total_kcal"] = item["qty"] * item["kcal"]
+            return
+
+    st.session_state.bill_items.append({
+        "class": dish_class,
+        "name": display_name,
+        "qty": 1,
+        "price": price,
+        "kcal": kcal,
+        "total_price": price,
+        "total_kcal": kcal
+    })
+
+
+def clear_bill():
+    """Resets the running bill."""
+    st.session_state.bill_items = []
+
+
+# ==============================================================================
+# SIDEBAR CONTROLS & CANTEEN MENU
+# ==============================================================================
+with st.sidebar:
+    st.header("⚙️ Settings & Controls")
+
+    selected_arch = st.selectbox(
+        "Model Architecture",
+        options=["mobilenetv3", "efficientnet_b0"],
+        index=0 if ACTIVE_MODEL_ARCH == "mobilenetv3" else 1,
+        help="Select model architecture matching your downloaded weights file."
+    )
+
+    conf_threshold = st.slider(
+        "Confidence Safety Threshold",
+        min_value=0.30,
+        max_value=0.95,
+        value=0.60,
+        step=0.05,
+        help="Predictions below this confidence or classified as 'not_food' are rejected to prevent billing errors."
+    )
+
+    st.divider()
+    st.subheader("📋 Canteen Menu & Rates (14 Classes)")
+    menu_df = get_cached_menu()
+    # Display food items only in the public menu table (hide not_food)
+    public_menu = menu_df[menu_df["class"] != "not_food"]
+    st.dataframe(
+        public_menu[["display_name", "price", "kcal"]].rename(
+            columns={"display_name": "Dish", "price": "Price (₹)", "kcal": "Calories (kcal)"}
+        ),
+        hide_index=True,
+        use_container_width=True
+    )
+
+    st.divider()
+    st.caption("Capstone Project — DL Lab 2026-27\nRamdeobaba University, Nagpur")
+
+
+# ==============================================================================
+# MAIN PAGE HEADER
+# ==============================================================================
+st.markdown('<div class="main-title">🍽️ Smart Canteen Billing Assistant</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="sub-title">Food Image Recognition using Transfer Learning (14 Classes: 13 Dishes + <code>not_food</code>) '
+    'with automated billing, calorie estimation, explainability (Grad-CAM), and real-time live camera classification.</div>',
+    unsafe_allow_html=True
+)
+
+# Load predictor model
+predictor, model_error = get_predictor_instance(selected_arch, conf_threshold)
+class_names = get_cached_classes()
+
+if model_error:
+    st.warning(
+        f"⚠️ **Model weights not detected yet!**\n\n"
+        f"{model_error}\n\n"
+        f"**How to get started:**\n"
+        f"1. Open and run `notebooks/capstone_training.ipynb` on Google Colab.\n"
+        f"2. Download `mobilenetv3.pth` and `classes.json` from your Google Drive `capstone` folder.\n"
+        f"3. Move them into `smart-canteen/app/model/`.\n\n"
+        f"*(You can still test manual billing and explore the menu below!)*"
+    )
+
+# ==============================================================================
+# TWO COLUMN LAYOUT: FOOD INPUT / DETECTION & RUNNING BILL
+# ==============================================================================
+col_left, col_right = st.columns([1.15, 0.85], gap="large")
+
+# ------------------------------------------------------------------------------
+# LEFT COLUMN: FOOD CAPTURE, RECOGNITION & LIVE CAMERA
+# ------------------------------------------------------------------------------
+with col_left:
+    st.subheader("📸 Food Image Capture & Classification")
+
+    # Three input options: Upload, Webcam Snapshot, or Live Camera Stream
+    tab_upload, tab_snapshot, tab_live = st.tabs([
+        "📁 Upload Photo",
+        "📸 Webcam Snapshot",
+        "🎥 Live Camera Stream"
+    ])
+
+    image_to_process = None
+
+    # Tab 1: Upload Photo
+    with tab_upload:
+        uploaded_file = st.file_uploader(
+            "Select an image file of your food plate:",
+            type=["jpg", "jpeg", "png", "webp"],
+            key="food_photo_uploader"
+        )
+        if uploaded_file is not None:
+            image_to_process = Image.open(uploaded_file)
+            st.image(image_to_process, caption="Uploaded Food Image", use_container_width=True)
+
+    # Tab 2: Snapshot Photo (Fallback built into Streamlit)
+    with tab_snapshot:
+        cam_photo = st.camera_input("Take a photo of the food dish:", key="food_camera_input")
+        if cam_photo is not None:
+            image_to_process = Image.open(cam_photo)
+            st.image(image_to_process, caption="Webcam Photo Snapshot", use_container_width=True)
+
+    # Tab 3: Continuous Live Camera Stream (streamlit-webrtc)
+    with tab_live:
+        st.write(
+            "**Continuous Video Stream:** Show your food plate to the camera for live real-time classification."
+        )
+        if WEBRTC_AVAILABLE and predictor is not None:
+            rtc_config = RTCConfiguration({
+                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+            })
+            webrtc_ctx = webrtc_streamer(
+                key="smart-canteen-live-webrtc",
+                mode=WebRtcMode.SENDRECV,
+                rtc_configuration=rtc_config,
+                video_processor_factory=LiveFoodVideoProcessor,
+                media_stream_constraints={"video": True, "audio": False},
+                async_processing=True,
+            )
+
+            if webrtc_ctx.video_processor:
+                webrtc_ctx.video_processor.set_predictor(predictor)
+                live_res = webrtc_ctx.video_processor.last_result
+                if live_res is not None:
+                    st.divider()
+                    if live_res["is_food"]:
+                        st.success(
+                            f"### Live Detected: **{live_res['class_name']}** ({live_res['confidence']*100:.1f}%)"
+                        )
+                        lc1, lc2 = st.columns(2)
+                        with lc1:
+                            st.metric("Unit Rate", f"₹ {live_res['price']}")
+                        with lc2:
+                            st.metric("Energy", f"{live_res['kcal']} kcal")
+
+                        if st.button("➕ Add Live Item to Bill", type="primary", use_container_width=True, key="btn_add_live"):
+                            add_item_to_bill(
+                                live_res["class_raw"],
+                                live_res["class_name"],
+                                live_res["price"],
+                                live_res["kcal"]
+                            )
+                            st.toast(f"Added {live_res['class_name']} to bill! 🧾")
+                            st.rerun()
+                    else:
+                        st.warning(
+                            "⚠️ **No food / Unknown food** — Low confidence or non-food item detected. "
+                            "Item cannot be added to bill."
+                        )
+        elif not WEBRTC_AVAILABLE:
+            st.warning(
+                "⚠️ **streamlit-webrtc or av is not installed.**\n\n"
+                "To enable browser live streaming, run:\n"
+                "`pip install opencv-python streamlit-webrtc av`\n\n"
+                "**Alternative options:**\n"
+                "- Use the **📸 Webcam Snapshot** tab above.\n"
+                "- Run the high-performance desktop OpenCV demo: `python app/live_demo.py`"
+            )
+        else:
+            st.info("Please load model weights first to enable live camera recognition.")
+
+        st.caption(
+            "💡 **Tip:** For maximum frame rate and direct GPU acceleration on your RTX 5050, run "
+            "<code>python app/live_demo.py</code> in your terminal.",
+            unsafe_allow_html=True
+        )
+
+    # --------------------------------------------------------------------------
+    # PROCESS STATIC IMAGE (FROM TAB 1 OR TAB 2)
+    # --------------------------------------------------------------------------
+    if image_to_process is not None and predictor is not None:
+        st.divider()
+        st.subheader("🔍 Recognition Results")
+
+        pred_result = predictor.predict_pil(image_to_process, smooth=False)
+        is_food = pred_result["is_food"]
+        dish_name = pred_result["class_name"]
+        conf_pct = pred_result["confidence"] * 100
+
+        # Safety & Not-Food Check
+        if not is_food:
+            st.error(
+                f"### ⚠️ No food / Unknown food\n\n"
+                f"The highest prediction is **{pred_result['class_raw'].replace('_', ' ').title()}** with **{conf_pct:.1f}%** confidence, "
+                f"which is below your safety threshold of **{conf_threshold*100:.0f}%** or classified as non-food (`not_food`).\n\n"
+                f"**Rule enforced:** This item will NOT be added to the customer's bill."
+            )
+        else:
+            # Confident, valid food dish
+            dish_class = pred_result["class_raw"]
+            item_price = pred_result["price"]
+            item_kcal = pred_result["kcal"]
+
+            st.success(f"### Identified Dish: **{dish_name}** ({conf_pct:.1f}% confidence)")
+
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                st.metric(label="Unit Price", value=f"₹ {item_price}")
+            with m2:
+                st.metric(label="Energy Estimate", value=f"{item_kcal} kcal")
+            with m3:
+                st.metric(label="Confidence", value=f"{conf_pct:.1f}%")
+
+            # Add to bill button (enabled ONLY for confident food)
+            if st.button("➕ Add Detected Item to Canteen Bill", type="primary", use_container_width=True):
+                add_item_to_bill(dish_class, dish_name, item_price, item_kcal)
+                st.toast(f"Added {dish_name} to bill! 🧾")
+                st.rerun()
+
+        # Display Top-3 Confidence Bars
+        st.write("**Top-3 Class Predictions:**")
+        for p in pred_result["top_predictions"]:
+            p_pct = p["confidence"] * 100
+            st.write(f"- **{p['class_name']}**: `{p_pct:.1f}%`")
+            st.progress(min(p["confidence"], 1.0))
+
+        # Explainable AI: Grad-CAM Expander
+        with st.expander("🔬 Explainable AI: View Grad-CAM Heatmap"):
+            st.info(
+                "Grad-CAM (Gradient-weighted Class Activation Mapping) highlights the exact visual features "
+                "(textures, spices, shape) that led the neural network to its decision."
+            )
+            gradcam_img, cam_err = compute_gradcam(predictor.model, predictor.target_layer, image_to_process)
+            if gradcam_img is not None:
+                st.image(gradcam_img, caption="Grad-CAM Activation Heatmap Overlay", use_container_width=True)
+            else:
+                st.warning(f"Grad-CAM visualization unavailable: {cam_err}")
+
+        # Active Feedback / Retraining Logger
+        st.divider()
+        with st.expander("🚩 Prediction Wrong? Help Us Improve (Active Feedback)"):
+            st.write("If the model misclassified your dish or non-food background, select the correct category to log it:")
+            feedback_class = st.selectbox(
+                "True category:",
+                options=class_names,
+                format_func=lambda x: "No Food / Background" if x == "not_food" else x.replace("_", " ").title(),
+                key="feedback_select"
+            )
+            if st.button("💾 Submit Feedback & Save Photo"):
+                try:
+                    save_folder = FEEDBACK_DIR / feedback_class
+                    save_folder.mkdir(parents=True, exist_ok=True)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    save_path = save_folder / f"{feedback_class}_{timestamp}.jpg"
+                    image_to_process.convert("RGB").save(save_path)
+                    st.success(f"Logged to `feedback/{feedback_class}/{save_path.name}` for future retraining!")
+                except Exception as fb_err:
+                    st.error(f"Could not save feedback: {fb_err}")
+
+
+# ------------------------------------------------------------------------------
+# RIGHT COLUMN: RUNNING BILL & NUTRITIONAL RECEIPT
+# ------------------------------------------------------------------------------
+with col_right:
+    st.subheader("🧾 Running Canteen Bill")
+
+    # Manual Add Option (excludes not_food)
+    with st.expander("➕ Manually Add Dish from Menu"):
+        orderable_dishes = menu_df[menu_df["class"] != "not_food"]["class"].tolist()
+        manual_dish = st.selectbox(
+            "Select item from menu:",
+            options=orderable_dishes,
+            format_func=lambda x: x.replace("_", " ").title(),
+            key="manual_add_dish"
+        )
+        if st.button("Add Selected Dish to Bill"):
+            row = menu_df[menu_df["class"] == manual_dish].iloc[0]
+            add_item_to_bill(row["class"], row["display_name"], int(row["price"]), int(row["kcal"]))
+            st.rerun()
+
+    if not st.session_state.bill_items:
+        st.info("Your billing cart is currently empty. Capture a food photo, use the live camera, or manually add items above.")
+    else:
+        # Display bill summary table
+        bill_data = []
+        grand_total_price = 0
+        grand_total_kcal = 0
+
+        for item in st.session_state.bill_items:
+            bill_data.append({
+                "Item": item["name"],
+                "Qty": item["qty"],
+                "Rate (₹)": item["price"],
+                "Amount (₹)": item["total_price"],
+                "Calories (kcal)": item["total_kcal"]
+            })
+            grand_total_price += item["total_price"]
+            grand_total_kcal += item["total_kcal"]
+
+        bill_table = pd.DataFrame(bill_data)
+        st.dataframe(bill_table, hide_index=True, use_container_width=True)
+
+        # Summary Box
+        st.markdown(f"""
+        <div class="receipt-box">
+            <h4 style="margin: 0 0 10px 0; color: #1E3A8A;">Total Bill Summary</h4>
+            <div style="font-size: 1.5rem; font-weight: bold; color: #111827;">
+                Total Amount: <span style="color: #059669;">₹ {grand_total_price}</span>
+            </div>
+            <div style="font-size: 1.1rem; color: #4B5563; margin-top: 5px;">
+                Total Estimated Energy: <span style="color: #D97706; font-weight: 600;">{grand_total_kcal} kcal</span>
+            </div>
+            <div style="font-size: 0.85rem; color: #6B7280; margin-top: 10px;">
+                Generated on: {datetime.now().strftime("%d %b %Y, %I:%M %p")}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.write("")
+        b_col1, b_col2 = st.columns(2)
+        with b_col1:
+            if st.button("🗑️ Clear Bill", use_container_width=True):
+                clear_bill()
+                st.rerun()
+        with b_col2:
+            if st.button("💳 Confirm & Print Receipt", type="primary", use_container_width=True):
+                st.success("🎉 Bill confirmed and sent to kitchen printer!")
+
+# ==============================================================================
+# FOOTER
+# ==============================================================================
+st.divider()
+st.markdown(
+    "<center><small>Smart Canteen Billing Assistant • Deep Learning Lab Capstone • "
+    "MobileNetV3 / EfficientNet-B0 (14 Classes with Live Camera Detection)</small></center>",
+    unsafe_allow_html=True
+)
+
+===================================================
+FILE: app/live_demo.py
+===================================================
+
+"""
+Smart Canteen Billing Assistant
+Live Camera Real-Time Classification Demo (OpenCV)
+
+Features:
+- Runs live food classification on webcam video stream
+- Automatic GPU acceleration (NVIDIA RTX CUDA if available, else CPU)
+- Preprocessing: Center-crop + ImageNet normalization matching Colab training
+- Dual backend support: PyTorch (.pth) and ONNX Runtime (.onnx) via --backend flag
+- 10-frame probability smoothing & inference every 3rd frame for high FPS
+- Interactive keyboard controls:
+    [SPACE] : Add confident food item to bill (rejected if not_food or < threshold)
+    [C]     : Clear running bill
+    [S]     : Save screenshot
+    [Q]     : Quit application
+"""
+
+import sys
+import os
+import time
+import argparse
+from datetime import datetime
+from pathlib import Path
+
+# Add app directory and project root to sys.path so modules import cleanly
+APP_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = APP_DIR.parent
+for p in [str(APP_DIR), str(PROJECT_ROOT)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+try:
+    from predictor import FoodPredictor, load_class_names, load_menu
+except ImportError:
+    from app.predictor import FoodPredictor, load_class_names, load_menu
+
+
+def parse_args():
+    """Parses command-line arguments for live webcam demo."""
+    parser = argparse.ArgumentParser(
+        description="Smart Canteen Real-Time Food Recognition Live Demo"
+    )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="torch",
+        choices=["torch", "onnx"],
+        help="Inference engine: 'torch' (PyTorch) or 'onnx' (ONNX Runtime). Default: torch",
+    )
+    parser.add_argument(
+        "--arch",
+        type=str,
+        default="mobilenetv3",
+        choices=["mobilenetv3", "efficientnet_b0"],
+        help="Model architecture for PyTorch backend. Default: mobilenetv3",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=None,
+        help="Optional custom path to .pth or .onnx model file.",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.60,
+        help="Confidence rejection threshold (0.0 to 1.0). Default: 0.60",
+    )
+    parser.add_argument(
+        "--camera",
+        type=int,
+        default=0,
+        help="Webcam camera index. Default: 0",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Target device: 'cuda' or 'cpu'. Default: auto-detects GPU",
+    )
+    return parser.parse_args()
+
+
+def draw_hud_banner(frame, x, y, w, h, bg_color=(20, 20, 20), alpha=0.65):
+    """Draws a semi-transparent dark banner behind text for high readability."""
+    import cv2
+    sub_img = frame[y:y + h, x:x + w]
+    rect = cv2.rectangle(
+        sub_img.copy(), (0, 0), (w, h), bg_color, -1
+    )
+    frame[y:y + h, x:x + w] = cv2.addWeighted(rect, alpha, sub_img, 1 - alpha, 0)
+
+
+def main():
+    args = parse_args()
+
+    # Import OpenCV with helpful error guidance
+    try:
+        import cv2
+    except ImportError:
+        print("\n[ERROR] OpenCV is not installed. Please run:")
+        print("  pip install opencv-python\n")
+        sys.exit(1)
+
+    print("=" * 65)
+    print("🍽️  SMART CANTEEN LIVE CAMERA DETECTION")
+    print("=" * 65)
+    print(f"Backend Engine   : {args.backend.upper()}")
+    print(f"Architecture     : {args.arch}")
+    print(f"Safety Threshold : {args.threshold * 100:.0f}%")
+    print(f"Camera Index     : {args.camera}")
+
+    # Check for PyTorch CUDA device
+    if args.backend == "torch":
+        try:
+            import torch
+            if torch.cuda.is_available():
+                device_name = torch.cuda.get_device_name(0)
+                print(f"Acceleration     : NVIDIA GPU ({device_name})")
+            else:
+                print("Acceleration     : CPU (No CUDA detected)")
+        except ImportError:
+            pass
+
+    # Initialize shared predictor
+    try:
+        predictor = FoodPredictor(
+            backend=args.backend,
+            arch_name=args.arch,
+            model_path=args.model_path,
+            threshold=args.threshold,
+            window_size=10,
+            device_str=args.device,
+        )
+        print(f"Model Loaded     : {predictor.model_path.name}")
+        print(f"Classes Supported: {predictor.num_classes} categories (including 'not_food')")
+    except FileNotFoundError as fnf_err:
+        print(f"\n[ERROR] Model file missing:\n{fnf_err}")
+        print("\nHow to fix:")
+        print("1. Run 'notebooks/capstone_training.ipynb' in Google Colab.")
+        print(f"2. Download '{args.arch}.pth' (or 'food_model.onnx') from Google Drive.")
+        print("3. Place it inside the 'smart-canteen/app/model/' folder.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n[ERROR] Failed to initialize predictor: {e}")
+        sys.exit(1)
+
+    # Open webcam
+    print(f"\nConnecting to webcam index {args.camera}...")
+    cap = cv2.VideoCapture(args.camera)
+
+    # Set preferred resolution (e.g., 1280x720 or 640x480)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+    if not cap.isOpened():
+        print(f"\n[ERROR] Could not open webcam at index {args.camera}!")
+        print("Please check that:")
+        print("1. Your laptop camera is connected and not blocked by physical shutter.")
+        print("2. Camera privacy permissions are allowed in Windows Settings.")
+        print("3. No other application (Zoom, Teams, browser) is using the camera.")
+        print("Tip: If you have an external webcam, try: python app/live_demo.py --camera 1\n")
+        sys.exit(1)
+
+    print("\n✓ Webcam opened successfully!")
+    print("\nControls:")
+    print("  [SPACE] Add currently detected food item to bill")
+    print("  [C]     Clear running bill")
+    print("  [S]     Save camera screenshot")
+    print("  [Q]     Quit live demo")
+    print("-" * 65)
+
+    # Running bill state
+    bill_items = []  # List of dicts: {"class": ..., "name": ..., "price": ..., "kcal": ...}
+    last_action_msg = ""
+    last_action_time = 0.0
+
+    # FPS counter variables
+    prev_time = time.time()
+    fps = 0.0
+    frame_count = 0
+    cached_prediction = None
+
+    # Screenshot directory
+    output_dir = PROJECT_ROOT / "outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Main capture loop wrapped in try/finally to guarantee camera release
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                print("\n[WARNING] Failed to grab frame from webcam. Retrying...")
+                time.sleep(0.05)
+                continue
+
+            frame_count += 1
+            curr_time = time.time()
+            elapsed = curr_time - prev_time
+            if elapsed > 0:
+                fps = 0.9 * fps + 0.1 * (1.0 / elapsed) if fps > 0 else (1.0 / elapsed)
+            prev_time = curr_time
+
+            h, w = frame.shape[:2]
+
+            # Calculate centered bounding box for food targeting (e.g. 65% of min dimension)
+            box_size = int(min(h, w) * 0.65)
+            x1 = (w - box_size) // 2
+            y1 = (h - box_size) // 2
+            x2 = x1 + box_size
+            y2 = y1 + box_size
+
+            # Extract center crop for neural network
+            crop_bgr = frame[y1:y2, x1:x2]
+
+            # Run inference every 3rd frame to optimize latency and FPS
+            if frame_count % 3 == 0 or cached_prediction is None:
+                cached_prediction = predictor.predict_cv2(crop_bgr, smooth=True)
+
+            pred = cached_prediction
+
+            # Determine box styling based on prediction outcome
+            # Confident food -> Green box
+            # Below threshold or not_food -> Red box with "Unknown food"
+            is_valid_food = pred["is_food"]
+            conf_pct = pred["confidence"] * 100
+
+            if is_valid_food:
+                box_color = (0, 220, 0)      # Green (BGR)
+                header_text = f"{pred['class_name']} ({conf_pct:.1f}%)"
+                sub_text = f"Rs. {pred['price']}  |  {pred['kcal']} kcal"
+            else:
+                box_color = (0, 0, 230)      # Red (BGR)
+                header_text = "Unknown food"
+                if pred["is_not_food"]:
+                    sub_text = f"Rejected: Not Food ({conf_pct:.1f}%)"
+                else:
+                    sub_text = f"Low Confidence: {conf_pct:.1f}% < {args.threshold*100:.0f}%"
+
+            # Draw targeting corners / box around the center crop area
+            cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+
+            # Draw corner accents for modern HUD look
+            corner_len = 24
+            cv2.line(frame, (x1, y1), (x1 + corner_len, y1), box_color, 4)
+            cv2.line(frame, (x1, y1), (x1, y1 + corner_len), box_color, 4)
+            cv2.line(frame, (x2, y1), (x2 - corner_len, y1), box_color, 4)
+            cv2.line(frame, (x2, y1), (x2, y1 + corner_len), box_color, 4)
+            cv2.line(frame, (x1, y2), (x1 + corner_len, y2), box_color, 4)
+            cv2.line(frame, (x1, y2), (x1, y2 - corner_len), box_color, 4)
+            cv2.line(frame, (x2, y2), (x2 - corner_len, y2), box_color, 4)
+            cv2.line(frame, (x2, y2), (x2, y2 - corner_len), box_color, 4)
+
+            # Draw badge above the target box
+            badge_h = 50
+            badge_y1 = max(0, y1 - badge_h - 6)
+            draw_hud_banner(frame, x1, badge_y1, box_size, badge_h, bg_color=(15, 15, 15), alpha=0.75)
+            cv2.putText(
+                frame, header_text, (x1 + 10, badge_y1 + 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, box_color, 2, cv2.LINE_AA
+            )
+            cv2.putText(
+                frame, sub_text, (x1 + 10, badge_y1 + 42),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (220, 220, 220), 1, cv2.LINE_AA
+            )
+
+            # Top HUD Bar: Title, Backend, Device & FPS
+            top_bar_h = 44
+            draw_hud_banner(frame, 0, 0, w, top_bar_h, bg_color=(25, 25, 25), alpha=0.85)
+            hud_title = f"Smart Canteen Assistant  |  Backend: {args.backend.upper()}  |  FPS: {fps:.1f}"
+            cv2.putText(
+                frame, hud_title, (16, 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA
+            )
+
+            # Running bill calculation
+            total_price = sum(item["price"] for item in bill_items)
+            total_kcal = sum(item["kcal"] for item in bill_items)
+            bill_count = len(bill_items)
+
+            # Running Bill Banner in top-right corner
+            bill_text = f"Bill: Rs. {total_price} ({bill_count} items | {total_kcal} kcal)"
+            (b_w, _), _ = cv2.getTextSize(bill_text, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+            cv2.putText(
+                frame, bill_text, (w - b_w - 20, 28),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 230, 120), 2, cv2.LINE_AA
+            )
+
+            # Bottom HUD Bar: Hotkeys
+            bottom_bar_h = 36
+            draw_hud_banner(frame, 0, h - bottom_bar_h, w, bottom_bar_h, bg_color=(25, 25, 25), alpha=0.85)
+            key_guide = "[SPACE] Add Item    [C] Clear Bill    [S] Screenshot    [Q] Quit"
+            cv2.putText(
+                frame, key_guide, (16, h - 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.52, (200, 200, 200), 1, cv2.LINE_AA
+            )
+
+            # Temporary notification toast (shows for 2.5 seconds when an action occurs)
+            if last_action_msg and (curr_time - last_action_time < 2.5):
+                toast_color = (0, 200, 100) if "Added" in last_action_msg else (0, 140, 255)
+                draw_hud_banner(frame, w // 2 - 250, h - bottom_bar_h - 45, 500, 36, bg_color=(10, 10, 10), alpha=0.9)
+                cv2.putText(
+                    frame, last_action_msg, (w // 2 - 230, h - bottom_bar_h - 22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, toast_color, 2, cv2.LINE_AA
+                )
+
+            # Display composite live frame
+            cv2.imshow("Smart Canteen - Live Camera Classification", frame)
+
+            # Handle keyboard inputs
+            key = cv2.waitKey(1) & 0xFF
+
+            # [Q] or [ESC] -> Quit
+            if key in [ord("q"), ord("Q"), 27]:
+                print("\n[INFO] Quitting live demo...")
+                break
+
+            # [SPACE] -> Add item to bill
+            elif key == 32:  # ASCII for Spacebar
+                if is_valid_food:
+                    bill_items.append({
+                        "class": pred["class_raw"],
+                        "name": pred["class_name"],
+                        "price": pred["price"],
+                        "kcal": pred["kcal"],
+                    })
+                    last_action_msg = f"Added: {pred['class_name']} (+Rs. {pred['price']})"
+                    last_action_time = curr_time
+                    print(f"[BILL +] Added {pred['class_name']} (Rs. {pred['price']}). Running total: Rs. {sum(i['price'] for i in bill_items)}")
+                else:
+                    if pred["is_not_food"]:
+                        last_action_msg = "Blocked: 'not_food' cannot be added to bill!"
+                    else:
+                        last_action_msg = "Blocked: Confidence too low to bill!"
+                    last_action_time = curr_time
+                    print(f"[REJECTED] {last_action_msg}")
+
+            # [C] -> Clear running bill
+            elif key in [ord("c"), ord("C")]:
+                bill_items.clear()
+                last_action_msg = "Bill cleared to Rs. 0"
+                last_action_time = curr_time
+                print("[BILL RESET] Running bill cleared.")
+
+            # [S] -> Save screenshot
+            elif key in [ord("s"), ord("S")]:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                snap_path = output_dir / f"canteen_snap_{timestamp}.jpg"
+                cv2.imwrite(str(snap_path), frame)
+                last_action_msg = f"Saved: {snap_path.name}"
+                last_action_time = curr_time
+                print(f"[SCREENSHOT] Saved screenshot to {snap_path}")
+
+    except KeyboardInterrupt:
+        print("\n[INFO] Stopped by user keyboard interrupt.")
+    finally:
+        # Wrap everything in try/finally so camera is ALWAYS released
+        cap.release()
+        cv2.destroyAllWindows()
+        print("[CLEANUP] Camera released and OpenCV windows closed successfully.\n")
+
+
+if __name__ == "__main__":
+    main()
+
+===================================================
+FILE: app/predictor.py
+===================================================
+
+"""
+Smart Canteen Billing Assistant: Food Image Recognition
+Shared Predictor Module (app/predictor.py)
+
+Handles:
+- Loading PyTorch (.pth) and ONNX (.onnx) models
+- GPU auto-detection (NVIDIA CUDA if available, else CPU)
+- Standard ImageNet preprocessing (Center-crop, 224x224, Normalization)
+- Softmax probability calculation & 10-frame temporal smoothing
+- Threshold rejection & 16th class ("not_food") handling
+- Menu lookup for pricing (INR) and calories (kcal)
+- Grad-CAM explainability computation
+"""
+
+import os
+import json
+from collections import deque
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any
+
+import numpy as np
+import pandas as pd
+from PIL import Image
+
+# Directories
+APP_DIR = Path(__file__).resolve().parent
+MODEL_DIR = APP_DIR / "model"
+MENU_FILE = APP_DIR / "menu.csv"
+CLASSES_FILE = MODEL_DIR / "classes.json"
+
+# Standard ImageNet normalization parameters
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
+# ==============================================================================
+# MENU & CLASS NAMES HELPERS
+# ==============================================================================
+def load_menu(menu_path: Optional[Path] = None) -> pd.DataFrame:
+    """Loads the canteen menu CSV with prices (INR) and calories (kcal)."""
+    target = Path(menu_path) if menu_path else MENU_FILE
+    if target.exists():
+        df = pd.read_csv(target)
+        df["display_name"] = df["class"].str.replace("_", " ").str.title()
+        return df
+    # Fallback default 16-class menu if file is missing
+    fallback_data = [
+        {"class": "burger", "price": 65, "kcal": 420},
+        {"class": "chai", "price": 15, "kcal": 80},
+        {"class": "chole_bhature", "price": 80, "kcal": 550},
+        {"class": "french_fries", "price": 50, "kcal": 310},
+        {"class": "fried_rice", "price": 80, "kcal": 380},
+        {"class": "ice_cream", "price": 40, "kcal": 210},
+        {"class": "idli", "price": 35, "kcal": 160},
+        {"class": "jalebi", "price": 40, "kcal": 300},
+        {"class": "masala_dosa", "price": 60, "kcal": 320},
+        {"class": "momos", "price": 50, "kcal": 280},
+        {"class": "not_food", "price": 0, "kcal": 0},
+        {"class": "pav_bhaji", "price": 70, "kcal": 450},
+        {"class": "pizza", "price": 120, "kcal": 680},
+        {"class": "poha", "price": 30, "kcal": 220},
+        {"class": "samosa", "price": 20, "kcal": 260},
+        {"class": "vada_pav", "price": 25, "kcal": 290},
+    ]
+    df = pd.DataFrame(fallback_data)
+    df["display_name"] = df["class"].str.replace("_", " ").str.title()
+    return df
+
+
+def load_class_names(classes_path: Optional[Path] = None) -> List[str]:
+    """Loads ordered class names from classes.json or menu.csv."""
+    target = Path(classes_path) if classes_path else CLASSES_FILE
+    if target.exists():
+        try:
+            with open(target, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+                if isinstance(data, dict):
+                    return [data[k] for k in sorted(data.keys(), key=lambda x: int(x))]
+        except Exception:
+            pass
+
+    # Fallback to menu classes
+    menu_df = load_menu()
+    return menu_df["class"].tolist()
+
+
+# ==============================================================================
+# PYTORCH MODEL ARCHITECTURE BUILDER
+# ==============================================================================
+def build_pytorch_architecture(arch_name: str, num_classes: int):
+    """
+    Constructs MobileNetV3-Large or EfficientNet-B0 matching Colab training.
+    Replaces classifier layer to output num_classes (default 16).
+    """
+    try:
+        import torch.nn as nn
+        from torchvision import models
+    except ImportError as e:
+        raise ImportError(
+            "PyTorch or torchvision is not installed. For NVIDIA RTX 5050 (CUDA 12.8), run:\n"
+            "pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128"
+        ) from e
+
+    if arch_name == "mobilenetv3":
+        model = models.mobilenet_v3_large(weights=None)
+        in_features = model.classifier[3].in_features
+        model.classifier[3] = nn.Linear(in_features, num_classes)
+        target_layer = model.features[-1]
+    elif arch_name == "efficientnet_b0":
+        model = models.efficientnet_b0(weights=None)
+        in_features = model.classifier[1].in_features
+        model.classifier[1] = nn.Linear(in_features, num_classes)
+        target_layer = model.features[-1]
+    else:
+        raise ValueError(f"Unsupported architecture '{arch_name}'. Use 'mobilenetv3' or 'efficientnet_b0'.")
+
+    return model, target_layer
+
+
+# ==============================================================================
+# PREPROCESSING & NUMPY SOFTMAX
+# ==============================================================================
+def center_crop_square(img_bgr_or_rgb: np.ndarray) -> np.ndarray:
+    """Center crops an image array (height, width, channels) into a 1:1 square."""
+    h, w = img_bgr_or_rgb.shape[:2]
+    min_dim = min(h, w)
+    start_x = (w - min_dim) // 2
+    start_y = (h - min_dim) // 2
+    return img_bgr_or_rgb[start_y:start_y + min_dim, start_x:start_x + min_dim]
+
+
+def preprocess_numpy_image(img_rgb: np.ndarray, target_size: Tuple[int, int] = (224, 224)) -> np.ndarray:
+    """
+    Center crops, resizes to target_size, scales to [0, 1], applies ImageNet normalization,
+    and returns a float32 array with shape [1, 3, 224, 224].
+    """
+    import cv2
+
+    square = center_crop_square(img_rgb)
+    resized = cv2.resize(square, target_size, interpolation=cv2.INTER_LINEAR)
+    # Scale to [0, 1]
+    norm = resized.astype(np.float32) / 255.0
+    # Normalize with ImageNet mean and std
+    norm = (norm - IMAGENET_MEAN) / IMAGENET_STD
+    # HWC to CHW -> [3, 224, 224]
+    chw = np.transpose(norm, (2, 0, 1))
+    # Add batch dimension -> [1, 3, 224, 224]
+    return np.expand_dims(chw, axis=0)
+
+
+def softmax(x: np.ndarray) -> np.ndarray:
+    """Numerically stable softmax for 1D or 2D numpy arrays."""
+    e_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+    return e_x / np.sum(e_x, axis=-1, keepdims=True)
+
+
+# ==============================================================================
+# GRAD-CAM EXPLAINABILITY
+# ==============================================================================
+def compute_gradcam(model, target_layer, image_pil: Image.Image) -> Tuple[Optional[np.ndarray], Optional[str]]:
+    """
+    Computes Grad-CAM heatmap overlay for PyTorch models.
+    Returns (heatmap_rgb_uint8, error_message).
+    """
+    try:
+        import torch
+        from pytorch_grad_cam import GradCAM
+        from pytorch_grad_cam.utils.image import show_cam_on_image
+
+        rgb_pil = image_pil.convert("RGB").resize((224, 224))
+        rgb_float = np.float32(rgb_pil) / 255.0
+
+        # Build tensor
+        tensor_img = (rgb_float - IMAGENET_MEAN) / IMAGENET_STD
+        tensor_img = np.transpose(tensor_img, (2, 0, 1))
+        tensor_img = torch.from_numpy(tensor_img).unsqueeze(0).float()
+
+        # If model is on CUDA, pass tensor to CUDA
+        device = next(model.parameters()).device
+        tensor_img = tensor_img.to(device)
+
+        cam = GradCAM(model=model, target_layers=[target_layer])
+        grayscale_cam = cam(input_tensor=tensor_img, targets=None)[0, :]
+        visualization = show_cam_on_image(rgb_float, grayscale_cam, use_rgb=True)
+        return visualization, None
+    except Exception as e:
+        return None, str(e)
+
+
+# ==============================================================================
+# UNIFIED FOOD PREDICTOR CLASS
+# ==============================================================================
+class FoodPredictor:
+    """
+    Shared predictor supporting PyTorch (.pth) and ONNX (.onnx) backends.
+    Includes temporal probability smoothing and safety rejection logic.
+    """
+
+    def __init__(
+        self,
+        backend: str = "torch",
+        arch_name: str = "mobilenetv3",
+        model_path: Optional[str] = None,
+        threshold: float = 0.60,
+        window_size: int = 10,
+        device_str: Optional[str] = None,
+    ):
+        self.backend = backend.lower().strip()
+        self.arch_name = arch_name.lower().strip()
+        self.threshold = float(threshold)
+        self.window_size = int(window_size)
+        self.class_names = load_class_names()
+        self.menu_df = load_menu()
+        self.num_classes = len(self.class_names)
+
+        # Sliding window deque for temporal smoothing across frames
+        self.prob_history = deque(maxlen=self.window_size)
+
+        # Device setup
+        self.device_str = device_str
+        self.torch_device = None
+        self.model = None
+        self.target_layer = None
+        self.ort_session = None
+
+        # Resolve model weights path
+        self.model_path = self._resolve_model_path(model_path)
+
+        # Initialize requested backend
+        if self.backend == "torch":
+            self._init_pytorch()
+        elif self.backend == "onnx":
+            self._init_onnx()
+        else:
+            raise ValueError(f"Invalid backend '{self.backend}'. Choose 'torch' or 'onnx'.")
+
+    def _resolve_model_path(self, custom_path: Optional[str]) -> Path:
+        """Finds model path or auto-detects from app/model/."""
+        if custom_path:
+            p = Path(custom_path)
+            if p.exists():
+                return p
+
+        # Auto-detect default names
+        if self.backend == "torch":
+            preferred = MODEL_DIR / f"{self.arch_name}.pth"
+            if preferred.exists():
+                return preferred
+            # Any .pth in MODEL_DIR
+            alt = list(MODEL_DIR.glob("*.pth"))
+            if alt:
+                return alt[0]
+            return preferred
+        else:
+            preferred = MODEL_DIR / "food_model.onnx"
+            if preferred.exists():
+                return preferred
+            alt = list(MODEL_DIR.glob("*.onnx"))
+            if alt:
+                return alt[0]
+            return preferred
+
+    def _init_pytorch(self):
+        """Loads PyTorch model on CUDA if available, else CPU."""
+        import torch
+
+        # Device selection: use GPU if available
+        if self.device_str:
+            self.torch_device = torch.device(self.device_str)
+        else:
+            self.torch_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        if not self.model_path.exists():
+            raise FileNotFoundError(
+                f"PyTorch weights not found at: '{self.model_path}'\n"
+                f"Please download 'mobilenetv3.pth' from Google Drive into 'app/model/'."
+            )
+
+        model, target_layer = build_pytorch_architecture(self.arch_name, self.num_classes)
+        state_dict = torch.load(self.model_path, map_location=self.torch_device)
+        model.load_state_dict(state_dict)
+        model.to(self.torch_device)
+        model.eval()
+
+        self.model = model
+        self.target_layer = target_layer
+
+    def _init_onnx(self):
+        """Loads ONNX model using onnxruntime with CPU or CUDA provider."""
+        try:
+            import onnxruntime as ort
+        except ImportError as e:
+            raise ImportError(
+                "onnxruntime is not installed. Please run: pip install onnxruntime"
+            ) from e
+
+        if not self.model_path.exists():
+            raise FileNotFoundError(
+                f"ONNX model file not found at: '{self.model_path}'\n"
+                f"Please export or download 'food_model.onnx' into 'app/model/'."
+            )
+
+        # Use CUDAExecutionProvider if available, else CPUExecutionProvider
+        available_providers = ort.get_available_providers()
+        providers = []
+        if "CUDAExecutionProvider" in available_providers and self.device_str != "cpu":
+            providers.append("CUDAExecutionProvider")
+        providers.append("CPUExecutionProvider")
+
+        self.ort_session = ort.InferenceSession(str(self.model_path), providers=providers)
+
+    def reset_smoothing(self):
+        """Clears the temporal probability sliding window."""
+        self.prob_history.clear()
+
+    def _forward(self, input_tensor_np: np.ndarray) -> np.ndarray:
+        """Executes forward pass through PyTorch or ONNX and returns 1D softmax array."""
+        if self.backend == "torch":
+            import torch
+            tensor = torch.from_numpy(input_tensor_np).to(self.torch_device).float()
+            with torch.no_grad():
+                logits = self.model(tensor)
+                probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+            return probs
+        else:
+            # ONNX Runtime forward pass
+            input_name = self.ort_session.get_inputs()[0].name
+            raw_outputs = self.ort_session.run(None, {input_name: input_tensor_np})
+            logits = raw_outputs[0][0]
+            return softmax(logits)
+
+    def predict_array(self, rgb_array: np.ndarray, smooth: bool = True) -> Dict[str, Any]:
+        """
+        Runs prediction on an RGB numpy array [height, width, 3].
+        Applies center crop, ImageNet normalization, forward pass, smoothing, and thresholding.
+        """
+        # Preprocess to [1, 3, 224, 224]
+        tensor_np = preprocess_numpy_image(rgb_array)
+
+        # Forward pass -> 1D probabilities across classes
+        raw_probs = self._forward(tensor_np)
+
+        # Temporal smoothing over the last N frames
+        if smooth:
+            self.prob_history.append(raw_probs)
+            smoothed_probs = np.mean(self.prob_history, axis=0)
+        else:
+            smoothed_probs = raw_probs
+
+        # Top-1 index and confidence
+        top_idx = int(np.argmax(smoothed_probs))
+        top_conf = float(smoothed_probs[top_idx])
+        top_class_raw = self.class_names[top_idx]
+
+        # Safety & Not-Food Checks:
+        # A prediction is valid food ONLY if class != 'not_food' AND confidence >= threshold
+        is_not_food = (top_class_raw == "not_food")
+        is_confident = (top_conf >= self.threshold)
+        is_valid_food = (not is_not_food) and is_confident
+
+        # Menu lookup for price and calories
+        if is_valid_food:
+            match_row = self.menu_df[self.menu_df["class"] == top_class_raw]
+            if not match_row.empty:
+                display_name = str(match_row.iloc[0]["display_name"])
+                price = int(match_row.iloc[0]["price"])
+                kcal = int(match_row.iloc[0]["kcal"])
+            else:
+                display_name = top_class_raw.replace("_", " ").title()
+                price = 40
+                kcal = 250
+            status_text = display_name
+        else:
+            display_name = "No food / Unknown food"
+            price = 0
+            kcal = 0
+            status_text = "No food / Unknown food"
+
+        # Top 3 predictions for display
+        top_k = min(3, len(self.class_names))
+        top_indices = np.argsort(smoothed_probs)[::-1][:top_k]
+        top_predictions = []
+        for idx in top_indices:
+            c_raw = self.class_names[idx]
+            top_predictions.append({
+                "class_raw": c_raw,
+                "class_name": c_raw.replace("_", " ").title(),
+                "confidence": float(smoothed_probs[idx])
+            })
+
+        return {
+            "class_raw": top_class_raw,
+            "class_name": display_name,
+            "status_text": status_text,
+            "confidence": top_conf,
+            "is_food": is_valid_food,
+            "is_not_food": is_not_food,
+            "is_confident": is_confident,
+            "price": price,
+            "kcal": kcal,
+            "all_probs": smoothed_probs,
+            "top_predictions": top_predictions
+        }
+
+    def predict_cv2(self, frame_bgr: np.ndarray, smooth: bool = True) -> Dict[str, Any]:
+        """Convenience method for OpenCV BGR camera frames."""
+        import cv2
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        return self.predict_array(rgb, smooth=smooth)
+
+    def predict_pil(self, image_pil: Image.Image, smooth: bool = False) -> Dict[str, Any]:
+        """Convenience method for PIL images (used by Streamlit upload/snapshot)."""
+        rgb = np.array(image_pil.convert("RGB"))
+        return self.predict_array(rgb, smooth=smooth)
+
+===================================================
+FILE: scripts/download_data_local.py
+===================================================
+
+"""
+Smart Canteen Billing Assistant
+Optional Local Dataset Downloader for Inspection
+
+NOTE:
+This script is OPTIONAL. The complete model training runs on Google Colab (with a free T4 GPU).
+You only need to run this on your laptop if you want to inspect raw images from the Kaggle dataset locally.
+Do NOT download Food-101 locally, as it is over 5 GB.
+"""
+
+import os
+import sys
+import shutil
+import zipfile
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 1. Load environment variables from .env file
+# Looks for .env in current folder or parent project folder
+env_path = Path(__file__).resolve().parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
+    print(f"[INFO] Loaded environment settings from {env_path}")
+else:
+    load_dotenv()
+    print("[INFO] No .env file found at project root; checking system environment variables...")
+
+# 2. Check Kaggle credentials
+kaggle_token = os.environ.get("KAGGLE_API_TOKEN")
+if not kaggle_token or kaggle_token.strip() == "paste_your_token_here":
+    print("\n[ERROR] KAGGLE_API_TOKEN is missing or not set!")
+    print("Please follow these steps:")
+    print("1. Log in to https://www.kaggle.com and go to Account / Settings.")
+    print("2. Click 'Create New Token' to download your Kaggle token.")
+    print("3. Copy .env.example to .env and paste your token inside.")
+    print("4. Re-run this script.\n")
+    sys.exit(1)
+
+# Set Kaggle environment variable for the kaggle library
+os.environ["KAGGLE_API_TOKEN"] = kaggle_token.strip()
+
+# 3. Check available disk space (require at least 10 GB)
+target_dir = Path(__file__).resolve().parent.parent / "data" / "indian_raw"
+target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+# Check disk space on target drive
+total, used, free = shutil.disk_usage(target_dir.parent)
+free_gb = free / (1024 ** 3)
+print(f"[INFO] Free disk space: {free_gb:.2f} GB")
+
+if free_gb < 10.0:
+    print(f"\n[WARNING] You have only {free_gb:.2f} GB free disk space.")
+    print("Downloading and unzipping the dataset requires at least 10 GB.")
+    choice = input("Do you still want to proceed? (y/N): ").strip().lower()
+    if choice != "y":
+        print("[INFO] Download cancelled by user.")
+        sys.exit(0)
+
+# 4. Download dataset using Kaggle API
+DATASET_NAME = "l33tc0d3r/indian-food-classification"
+print(f"\n[INFO] Starting download of Kaggle dataset: {DATASET_NAME}")
+print(f"[INFO] Destination folder: {target_dir}")
+
+target_dir.mkdir(parents=True, exist_ok=True)
+
+try:
+    # Import kaggle library
+    import kaggle
+    kaggle.api.authenticate()
+    print("[INFO] Kaggle authentication successful!")
+    
+    # Download and unzip directly
+    kaggle.api.dataset_download_files(DATASET_NAME, path=str(target_dir), unzip=True)
+    print("\n[SUCCESS] Download and extraction completed successfully!")
+except ImportError:
+    print("\n[ERROR] The 'kaggle' python package is not installed.")
+    print("Please run: pip install kaggle")
+    sys.exit(1)
+except Exception as e:
+    print(f"\n[ERROR] An error occurred while downloading: {e}")
+    print("Tip: If using the Kaggle API CLI, you can also run:")
+    print(f"kaggle datasets download -d {DATASET_NAME} -p \"{target_dir}\" --unzip")
+    sys.exit(1)
+
+# 5. Inspect folder names and count images
+print("\n" + "=" * 50)
+print("DATASET INSPECTION: FOLDER NAMES & IMAGE COUNTS")
+print("=" * 50)
+
+valid_extensions = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+category_counts = {}
+
+for root, dirs, files in os.walk(target_dir):
+    # Only count files in leaf subfolders
+    image_files = [f for f in files if Path(f).suffix.lower() in valid_extensions]
+    if image_files:
+        rel_folder = os.path.relpath(root, target_dir)
+        category_counts[rel_folder] = len(image_files)
+
+if category_counts:
+    total_images = sum(category_counts.values())
+    for folder, count in sorted(category_counts.items()):
+        print(f"  • {folder:35s}: {count:4d} images")
+    print("-" * 50)
+    print(f"Total categories found: {len(category_counts)}")
+    print(f"Total images found:     {total_images}")
+else:
+    print("[WARNING] No image files found. Check extraction folder.")
+print("=" * 50)
+print("\n[DONE] You can inspect the images locally, but remember to run the full training in Google Colab!")
+
+===================================================
+FILE: src/prepare_own_photos.py
+===================================================
+
+# Converts own photos to clean JPGs, fixes folder names, and builds own_photos.zip
+import os, zipfile
+from pathlib import Path
+from PIL import Image
+import pillow_heif
+pillow_heif.register_heif_opener()      # lets Pillow open AVIF/HEIC files
+
+SRC = Path(r"C:\Projects\own_extracted")        # where you extracted the zip
+DST = Path(r"C:\Projects\own_photos_clean")     # clean output folder
+ZIP = Path(r"C:\Projects\own_photos.zip")       # final zip (outside OneDrive)
+
+# Map any spelling of the folder name to the real class name
+def norm(s): return s.lower().replace("_", "").replace(" ", "").replace("-", "")
+CLASSES = {"vadapav": "vada_pav", "poha": "poha", "notfood": "not_food"}
+EXT = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".heic", ".bmp"}
+
+DST.mkdir(parents=True, exist_ok=True)
+counts = {}
+for folder in SRC.rglob("*"):                     # search all sub-folders (handles extra parent folder)
+    if folder.is_dir() and norm(folder.name) in CLASSES:
+        cls = CLASSES[norm(folder.name)]
+        out = DST / cls
+        out.mkdir(exist_ok=True)
+        n = counts.get(cls, 0)
+        for f in sorted(folder.iterdir()):
+            if f.suffix.lower() not in EXT:
+                continue
+            try:
+                img = Image.open(f).convert("RGB")
+                img.thumbnail((1024, 1024))        # limit size
+                n += 1
+                img.save(out / f"{cls}_{n:03d}.jpg", quality=90)
+            except Exception as e:
+                print("Skipped:", f.name, "->", e)
+        counts[cls] = n
+
+print("\nImages per class:", counts)
+for c in CLASSES.values():
+    if counts.get(c, 0) < 20:
+        print(f"WARNING: {c} has fewer than 20 images!")
+
+# Build the zip with class folders at the TOP level (forward slashes, Linux-safe)
+with zipfile.ZipFile(ZIP, "w", zipfile.ZIP_DEFLATED) as z:
+    for p in DST.rglob("*.jpg"):
+        z.write(p, p.relative_to(DST).as_posix())
+print("Created:", ZIP, "size MB:", round(ZIP.stat().st_size / 1e6, 1))
