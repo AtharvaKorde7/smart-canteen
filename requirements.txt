@@ -1,14 +1,16 @@
-# NOTE: For NVIDIA RTX 5050 GPU (CUDA 12.8), PyTorch and torchvision must be installed separately first:
-# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+
+--extra-index-url https://download.pytorch.org/whl/cpu
 
 streamlit>=1.30.0
 pillow>=9.5.0
 pandas>=2.0.0
+torch
+torchvision
 grad-cam>=1.5.0
 onnxruntime>=1.15.0
 numpy>=1.24.0
 matplotlib>=3.7.0
 python-dotenv>=1.0.0
-opencv-python>=4.8.0
+opencv-python-headless>=4.8.0
 streamlit-webrtc>=0.47.0
 av>=10.0.0
