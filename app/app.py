@@ -444,12 +444,38 @@ with col_left:
         annotated_img = det_result["image_annotated"]
         ignored_count = det_result["ignored_count"]
 
-        # Display annotated image with bounding boxes
-        st.image(
-            annotated_img,
-            caption=f"Detection Overlay: {len(detections)} item(s) found",
-            use_container_width=True
-        )
+        # Toggle between Clean Production View and Detailed Debug View
+        col_img_hdr, col_dbg_chk = st.columns([0.60, 0.40])
+        with col_img_hdr:
+            st.caption(f"**Proposal Engine:** `{det_result['proposal_method']}` | **Found:** {len(detections)} item(s)")
+        with col_dbg_chk:
+            show_debug_view = st.checkbox("🔍 Debug View (All Proposals)", value=debug_mode, key="chk_debug_view")
+
+        if show_debug_view:
+            st.image(
+                det_result["image_debug"],
+                caption=f"Debug View: {det_result['proposal_method']} proposals with status & reject reasons",
+                use_container_width=True
+            )
+            with st.expander("🛠️ Proposal Candidates Breakdown & Reject Reasons", expanded=True):
+                dbg_rows = []
+                for c in det_result.get("all_candidates", []):
+                    dbg_rows.append({
+                        "#": c["index"],
+                        "Proposal": f"{c['yolo_label']} ({c['yolo_conf']:.2f})",
+                        "Predicted Class": c["class_name"],
+                        "Confidence": f"{c['confidence']*100:.1f}%",
+                        "Status": c["status"].upper(),
+                        "Reject Reason": c["reject_reason"] or "Accepted (Passed safety & NMS)",
+                        "Box (x, y, w, h)": str(c["box"])
+                    })
+                st.dataframe(pd.DataFrame(dbg_rows), hide_index=True, use_container_width=True)
+        else:
+            st.image(
+                annotated_img,
+                caption=f"Detection Overlay: {len(detections)} item(s) found",
+                use_container_width=True
+            )
 
         if ignored_count > 0:
             st.caption(f"ℹ️ Filtered out {ignored_count} candidate region(s) classified as non-food or below {conf_threshold*100:.0f}% confidence.")
