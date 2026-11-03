@@ -4,7 +4,7 @@ Smart Canteen Billing Assistant: Multi-Item Food Detector (app/detector.py)
 Architecture (Detect-then-Classify):
 1. Region Proposal Generation:
    (a) Ultralytics YOLO-World (open-vocabulary) with generic prompts:
-       ["food", "samosa", "cup of tea", "bowl", "bun", "plate of food", "cup", "plate"]
+       ["food", "samosa", "cup of tea", "bowl", "bun", "plate of food"]
    (b) FastSAM (segmentation-based proposal method) as secondary fallback.
    (c) Heuristic proposals (Otsu, contours, multi-scale spatial partitions) as last-resort fallback.
 2. Tight Crop & Context Masking:
@@ -28,14 +28,31 @@ import os
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
-import cv2
 from PIL import Image, ImageDraw
+
+# Safe import of OpenCV to handle headless/cloud environments gracefully
+try:
+    import cv2
+    CV2_AVAILABLE = True
+    CV2_IMPORT_ERROR = None
+except Exception as _cv2_err:
+    cv2 = None
+    CV2_AVAILABLE = False
+    CV2_IMPORT_ERROR = str(_cv2_err)
+
+# Optional Streamlit integration for caching loaded models across reruns
+try:
+    import streamlit as st
+    HAS_STREAMLIT = True
+except ImportError:
+    st = None
+    HAS_STREAMLIT = False
 
 # Project roots and weights
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WEIGHTS_DIR = PROJECT_ROOT
 
-# Cached model instances
+# Cached model instances for non-Streamlit environments
 _YOLO_WORLD_MODEL = None
 _FASTSAM_MODEL = None
 
@@ -86,13 +103,13 @@ def calculate_containment(innerBox: Tuple[int, int, int, int], outerBox: Tuple[i
 
 
 # ==============================================================================
-# 1. REGION PROPOSAL GENERATORS
+# 1. REGION PROPOSAL GENERATORS (LAZY LOADING & STREAMLIT CACHING)
 # ==============================================================================
-def get_yolo_world_model():
-    """Initializes and caches the YOLO-World open-vocabulary detector."""
-    global _YOLO_WORLD_MODEL
-    if _YOLO_WORLD_MODEL is not None:
-        return _YOLO_WORLD_MODEL
+def _build_yolo_world_model():
+    """Builds YOLO-World detector lazily on first call."""
+    use_yolo_env = os.environ.get("USE_YOLO", "1").strip().lower()
+    if use_yolo_env in ("0", "false", "no", "off"):
+        return None
 
     try:
         from ultralytics import YOLOWorld
@@ -117,18 +134,17 @@ def get_yolo_world_model():
         model = YOLOWorld(str(chosen_weight))
         model.to(device)
         model.set_classes(DEFAULT_PROMPTS)
-        _YOLO_WORLD_MODEL = model
-        return _YOLO_WORLD_MODEL
+        return model
     except Exception as e:
         print(f"[Detector] Failed to load YOLO-World: {e}")
         return None
 
 
-def get_fastsam_model():
-    """Initializes and caches the FastSAM segmentation proposal model."""
-    global _FASTSAM_MODEL
-    if _FASTSAM_MODEL is not None:
-        return _FASTSAM_MODEL
+def _build_fastsam_model():
+    """Builds FastSAM segmentation proposal model lazily on first call."""
+    use_yolo_env = os.environ.get("USE_YOLO", "1").strip().lower()
+    if use_yolo_env in ("0", "false", "no", "off"):
+        return None
 
     try:
         from ultralytics import FastSAM
@@ -150,11 +166,60 @@ def get_fastsam_model():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model = FastSAM(str(chosen_weight))
         model.to(device)
-        _FASTSAM_MODEL = model
-        return _FASTSAM_MODEL
+        return model
     except Exception as e:
         print(f"[Detector] Failed to load FastSAM: {e}")
         return None
+
+
+# Streamlit resource cache wrappers when running in Streamlit app
+if HAS_STREAMLIT and hasattr(st, "cache_resource"):
+    @st.cache_resource(show_spinner="Loading YOLO-World detector...")
+    def _cached_yolo_world():
+        return _build_yolo_world_model()
+
+    @st.cache_resource(show_spinner="Loading FastSAM detector...")
+    def _cached_fastsam():
+        return _build_fastsam_model()
+else:
+    _cached_yolo_world = None
+    _cached_fastsam = None
+
+
+def get_yolo_world_model():
+    """Retrieves cached YOLO-World detector instance."""
+    global _YOLO_WORLD_MODEL
+    use_yolo_env = os.environ.get("USE_YOLO", "1").strip().lower()
+    if use_yolo_env in ("0", "false", "no", "off"):
+        return None
+
+    if HAS_STREAMLIT and _cached_yolo_world is not None:
+        try:
+            return _cached_yolo_world()
+        except Exception:
+            pass
+
+    if _YOLO_WORLD_MODEL is None:
+        _YOLO_WORLD_MODEL = _build_yolo_world_model()
+    return _YOLO_WORLD_MODEL
+
+
+def get_fastsam_model():
+    """Retrieves cached FastSAM model instance."""
+    global _FASTSAM_MODEL
+    use_yolo_env = os.environ.get("USE_YOLO", "1").strip().lower()
+    if use_yolo_env in ("0", "false", "no", "off"):
+        return None
+
+    if HAS_STREAMLIT and _cached_fastsam is not None:
+        try:
+            return _cached_fastsam()
+        except Exception:
+            pass
+
+    if _FASTSAM_MODEL is None:
+        _FASTSAM_MODEL = _build_fastsam_model()
+    return _FASTSAM_MODEL
 
 
 def generate_yolo_world_proposals(
@@ -274,27 +339,33 @@ def generate_heuristic_proposals(
 
     raw_boxes: List[Tuple[int, int, int, int]] = []
 
-    gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
-    hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV)
-    saturation = hsv[:, :, 1]
+    # If OpenCV is available, perform morphological contour detection
+    if CV2_AVAILABLE and cv2 is not None:
+        try:
+            gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+            blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+            hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV)
+            saturation = hsv[:, :, 1]
 
-    _, thresh_gray = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    _, thresh_sat = cv2.threshold(saturation, 35, 255, cv2.THRESH_BINARY)
-    combined_mask = cv2.bitwise_or(thresh_gray, thresh_sat)
+            _, thresh_gray = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            _, thresh_sat = cv2.threshold(saturation, 35, 255, cv2.THRESH_BINARY)
+            combined_mask = cv2.bitwise_or(thresh_gray, thresh_sat)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
-    closed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+            closed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if min_area <= area <= max_area:
-            bx, by, bw, bh = cv2.boundingRect(cnt)
-            aspect = bw / float(bh) if bh > 0 else 0
-            if 0.25 <= aspect <= 4.0:
-                raw_boxes.append((bx, by, bw, bh))
+            contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if min_area <= area <= max_area:
+                    bx, by, bw, bh = cv2.boundingRect(cnt)
+                    aspect = bw / float(bh) if bh > 0 else 0
+                    if 0.25 <= aspect <= 4.0:
+                        raw_boxes.append((bx, by, bw, bh))
+        except Exception as e:
+            print(f"[Detector] Contour detection error: {e}")
 
+    # Multi-scale geometric spatial partitions (always added for robustness)
     half_w = w // 2
     half_h = h // 2
     raw_boxes.append((0, 0, half_w, h))
@@ -336,10 +407,18 @@ def get_candidate_proposals(
     """
     img_rgb = np.array(pil_img)
 
-    if preferred_method in ["auto", "yolo_world"]:
+    use_yolo_env = os.environ.get("USE_YOLO", "1").strip().lower()
+    use_yolo = use_yolo_env not in ("0", "false", "no", "off")
+
+    if use_yolo and preferred_method in ["auto", "yolo_world"]:
         props = generate_yolo_world_proposals(pil_img)
         if props is not None and len(props) > 0:
             return props, "yolo_world"
+
+    # If YOLO was disabled by USE_YOLO=0, fall back to heuristic proposals immediately
+    if not use_yolo:
+        props = generate_heuristic_proposals(img_rgb)
+        return props, "heuristic_fallback"
 
     if preferred_method in ["auto", "fastsam"]:
         props = generate_fastsam_proposals(pil_img)
@@ -386,7 +465,6 @@ def detect_food_items(
         proposals = proposals[:max_proposals]
 
     # Separate container/tableware proposals from discrete item proposals
-    # Food dishes sit ON containers, so containers should NOT mask dishes
     candidate_items = [p for p in proposals if not p.get("is_container", False)]
     candidate_containers = [p for p in proposals if p.get("is_container", False)]
 
@@ -414,7 +492,6 @@ def detect_food_items(
 
         # Mask overlapping peer items with gray (128, 128, 128)
         # Prevents one crop from containing two distinct dishes.
-        # Only other discrete ITEMS mask this crop (containers/plates are never used to mask dishes).
         draw = ImageDraw.Draw(crop)
         masked_peer = False
 
@@ -451,7 +528,7 @@ def detect_food_items(
         top_conf = float(pred["confidence"])
         top_class = pred["class_raw"]
 
-        # Human-readable display name (independent of whether it passes threshold)
+        # Human-readable display name
         match_row = predictor.menu_df[predictor.menu_df["class"] == top_class]
         if not match_row.empty:
             display_name = str(match_row.iloc[0]["display_name"])
@@ -501,10 +578,8 @@ def detect_food_items(
 
         all_evaluated_candidates.append(candidate_record)
 
-    # 4. Multi-item & Container Disambiguation (Requirement 3)
-    # "suppress a box that is mostly inside a larger plate/container box only if the plate box itself is not a food class."
+    # 4. Multi-item & Container Disambiguation
     for i, c_parent in enumerate(all_evaluated_candidates):
-        # Find all child items mostly inside this parent box
         children = []
         for j, c_child in enumerate(all_evaluated_candidates):
             if i == j:
@@ -532,21 +607,17 @@ def detect_food_items(
             c_parent["status"] = "suppressed_composite_parent"
             c_parent["reject_reason"] = "Composite container enclosing multiple disjoint items"
         elif len(children) >= 1:
-            # Parent covers child item(s):
-            # If parent itself is NOT a food class (or not_food / container), suppress parent, keep child
-            # If parent itself IS a valid food class (e.g. Pizza or Pav Bhaji), suppress child, keep parent
             if not c_parent["is_food"] or c_parent["status"] != "candidate" or c_parent["is_container_prop"]:
                 if c_parent["status"] == "candidate":
                     c_parent["status"] = "suppressed_container"
                     c_parent["reject_reason"] = "Container enclosing food dish"
             else:
-                # Parent is a food dish itself; suppress child sub-boxes
                 for ch in children:
                     if ch["status"] == "candidate":
                         ch["status"] = "suppressed_inside_food"
                         ch["reject_reason"] = f"Inside larger food item #{c_parent['index']} ({c_parent['class_name']})"
 
-    # 5. Class-Agnostic Non-Maximum Suppression (NMS) (Requirement 3)
+    # 5. Class-Agnostic Non-Maximum Suppression (NMS)
     surviving = [c for c in all_evaluated_candidates if c["status"] == "candidate"]
     surviving.sort(key=lambda c: c["confidence"], reverse=True)
 
@@ -617,6 +688,18 @@ def draw_detections(
 
     h, w = image_rgb.shape[:2]
 
+    # If OpenCV is unavailable, use PIL.ImageDraw fallback
+    if not CV2_AVAILABLE or cv2 is None:
+        pil_canvas = Image.fromarray(image_rgb)
+        draw = ImageDraw.Draw(pil_canvas)
+        for i, det in enumerate(detections):
+            bx, by, bw, bh = det["box"]
+            color = COLORS[i % len(COLORS)]
+            draw.rectangle([bx, by, bx + bw, by + bh], outline=color, width=2)
+            item_idx = det.get("item_number", i + 1)
+            draw.text((bx + 4, max(0, by - 16)), f"#{item_idx} {det['class_name']}", fill=color)
+        return np.array(pil_canvas)
+
     for i, det in enumerate(detections):
         bx, by, bw, bh = det["box"]
         color = COLORS[i % len(COLORS)]
@@ -681,6 +764,17 @@ def draw_debug_candidates(
         "suppressed_inside_food": (148, 163, 184), # Gray
         "suppressed_container": (100, 116, 139)    # Slate
     }
+
+    # If OpenCV is unavailable, use PIL fallback
+    if not CV2_AVAILABLE or cv2 is None:
+        pil_canvas = Image.fromarray(image_rgb)
+        draw = ImageDraw.Draw(pil_canvas)
+        for cand in candidates:
+            bx, by, bw, bh = cand["box"]
+            color = STATUS_COLORS.get(cand["status"], (200, 200, 200))
+            draw.rectangle([bx, by, bx + bw, by + bh], outline=color, width=2)
+            draw.text((bx + 4, max(0, by - 14)), f"#{cand['index']} {cand['class_name']}", fill=color)
+        return np.array(pil_canvas)
 
     # Top banner for Proposal Method
     is_narrow = (w < 620)

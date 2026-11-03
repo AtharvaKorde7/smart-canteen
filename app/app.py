@@ -41,6 +41,16 @@ import pandas as pd
 import numpy as np
 from PIL import Image, ImageOps
 
+# Safe import of OpenCV to handle headless/cloud environments gracefully
+try:
+    import cv2
+    CV2_AVAILABLE = True
+    CV2_IMPORT_ERROR = None
+except Exception as _cv2_err:
+    cv2 = None
+    CV2_AVAILABLE = False
+    CV2_IMPORT_ERROR = str(_cv2_err)
+
 # Import shared prediction, detection, and billing utility functions
 try:
     from predictor import (
@@ -51,7 +61,11 @@ try:
         MODEL_DIR,
         MENU_FILE,
     )
-    from detector import detect_food_items
+    from detector import (
+        detect_food_items,
+        CV2_AVAILABLE as DET_CV2_AVAILABLE,
+        CV2_IMPORT_ERROR as DET_CV2_ERROR,
+    )
     from billing import (
         aggregate_detections,
         merge_into_bill,
@@ -68,7 +82,11 @@ except ImportError:
         MODEL_DIR,
         MENU_FILE,
     )
-    from app.detector import detect_food_items
+    from app.detector import (
+        detect_food_items,
+        CV2_AVAILABLE as DET_CV2_AVAILABLE,
+        CV2_IMPORT_ERROR as DET_CV2_ERROR,
+    )
     from app.billing import (
         aggregate_detections,
         merge_into_bill,
@@ -80,14 +98,13 @@ except ImportError:
 # Optional WebRTC import for continuous live webcam streaming in browser
 try:
     import av
-    import cv2
     from streamlit_webrtc import (
         webrtc_streamer,
         VideoProcessorBase,
         RTCConfiguration,
         WebRtcMode,
     )
-    WEBRTC_AVAILABLE = True
+    WEBRTC_AVAILABLE = CV2_AVAILABLE
 except ImportError:
     WEBRTC_AVAILABLE = False
 
@@ -324,6 +341,13 @@ st.markdown(
 predictor, model_error = get_predictor_instance(selected_arch, conf_threshold)
 class_names = get_cached_classes()
 
+if not CV2_AVAILABLE or not DET_CV2_AVAILABLE:
+    st.error(
+        f"⚠️ **OpenCV (`cv2`) failed to import:** `{CV2_IMPORT_ERROR or DET_CV2_ERROR}`\n\n"
+        "If running on Streamlit Community Cloud (Debian Linux), ensure `packages.txt` exists in the repository root containing:\n"
+        "```\nlibgl1\nlibglib2.0-0\n```"
+    )
+
 if model_error:
     st.error(
         f"⚠️ **Model weights missing or failed to load:**\n\n`{model_error}`\n\n"
@@ -443,6 +467,10 @@ with col_left:
         detections = det_result["detections"]
         annotated_img = det_result["image_annotated"]
         ignored_count = det_result["ignored_count"]
+
+        # Notice when running in lightweight mode without YOLO
+        if det_result.get("proposal_method") == "heuristic_fallback":
+            st.info("ℹ️ Lightweight mode: YOLO unavailable")
 
         # Toggle between Clean Production View and Detailed Debug View
         col_img_hdr, col_dbg_chk = st.columns([0.60, 0.40])
