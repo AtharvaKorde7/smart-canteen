@@ -124,31 +124,44 @@ While EfficientNet-B0 achieved identical Top-1 accuracy (93.71%), MobileNetV3-La
 ## 📸 Sample Outputs
 
 ### 1. Training & Convergence Dynamics
+
 ![Training Curves](docs/results/training_curves.png)
+
 *Figure 1: Training and validation loss convergence and accuracy progression across warmup and fine-tuning epochs.*
 
 ### 2. Confusion Matrix (MobileNetV3-Large, 572 test images)
+
 ![Confusion Matrix](docs/results/confusion_matrix_mobilenetv3-large.png)
-*Figure 2: Normalized confusion matrix across all 14 classes evaluated on the 572-image held-out test split.*
+
+*Figure 2: Confusion matrix (raw counts) across all 14 classes on the 572-image held-out test split.*
 
 ### 3. Model Explainability via Grad-CAM
+
 ![Grad-CAM Samples](docs/results/gradcam_samples.png)
-*Figure 3: Class activation heatmaps confirming feature representations are focused on core dish textures rather than background plates.*
+
+*Figure 3: Grad-CAM activation heatmaps on six test burger images showing network attention concentrated around the bun, patty, and fillings. Grad-CAM is a qualitative visualization of regions influencing the prediction, not a proof of correctness.*
 
 ### 4. Error Analysis & Misclassified Examples
+
 ![Misclassified Examples](docs/results/misclassified_examples.png)
-*Figure 4: Analysis of edge-case misclassifications on challenging test samples.*
+
+*Figure 4: Qualitative error analysis showing 8 misclassified test dishes with true labels and predicted classes. Several of these test images appear mislabeled or off-topic in the source dataset (e.g. a chai-labelled image showing a burger and fries), so some errors reflect label noise and not only model error.*
 
 ### 5. Multi-Item Detection — SUCCESS Case (Samosa x1 + Chai x1)
+
 ![Multi-Item Detection Success](docs/results/chai_samosa_success.png)
+
 *Figure 5: Successful multi-item detection on a canteen tray correctly isolating Samosa (x1) and Chai (x1) with tight bounding proposals and billing line items.*
 
 ### 6. Multi-Item Detection — FAILURE Case & Cashier Verification
+
 ![Multi-Item Detection Failure](docs/results/annotated_samosa_chai_01.jpg)
-*Figure 6: The classifier labels the standing, cone-shaped samosa as Masala Dosa (52.6%, samosa 19.6%) because that styled photo differs from our training images; the cashier verification table lets the operator correct it.*
+
+*Figure 6: The classifier labels the standing, cone-shaped samosa as Masala Dosa (52.6%, samosa 19.6%) likely because that styled photo differs from our training images; the cashier verification table lets the operator correct it.*
 
 ![Candidate Proposal Debug View](docs/results/debug_samosa_chai_01.jpg)
-*Figure 7: Debug inspection view displaying all raw proposal candidates, confidence scores, proposal engine label (YOLO-World), and rejected background surfaces.*
+
+*Figure 7: Detector debug view showing accepted and rejected candidate boxes.*
 
 > **Note on Sample Photos**:  
 > The two sample photos are stock images used only for testing; they are not part of the training data. Results on individual photos are examples, not an accuracy measure. The measured test accuracy is 93.71% (top-1) on 572 held-out images of single dishes.

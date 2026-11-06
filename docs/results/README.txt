@@ -11,7 +11,7 @@ Existing Result Files:
 1. `training_curves.png`
    - Training and validation loss convergence and accuracy curves across epochs.
 2. `confusion_matrix_mobilenetv3-large.png`
-   - Normalized confusion matrix across all 14 classes on the 572-image held-out test split.
+   - Confusion matrix (raw counts) across all 14 classes on the 572-image held-out test split.
 3. `gradcam_samples.png`
    - Grid of Grad-CAM activation heatmaps explaining convolutional feature attention.
 4. `misclassified_examples.png`
