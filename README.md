@@ -3,12 +3,12 @@
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://smart-canteen.streamlit.app)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg)](https://pytorch.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-An end-to-end deep learning vision application and point-of-sale billing assistant designed for college canteens and cafeterias. By leveraging transfer learning with a fine-tuned MobileNetV3-Large convolutional neural network and open-vocabulary region proposals (YOLO-World / FastSAM / Spatial Heuristics), the system detects single or multiple Indian food dishes on a plate or tray from photos or live camera feeds, classifies them across 14 target classes (13 canteen dishes + 1 background rejection class), calculates prices and nutritional energy (calories), and automatically generates customer receipts.
+An end-to-end deep learning vision application and point-of-sale billing assistant designed for college canteens and cafeterias. By leveraging transfer learning with a fine-tuned MobileNetV3-Large convolutional neural network and open-vocabulary region proposals (YOLO-World / FastSAM / Spatial Heuristics), the system detects single or multiple Indian food dishes on a plate or tray from photos or live camera feeds, classifies them across **14 classes (13 dishes + not_food)**, calculates prices and nutritional energy (calories), and automatically generates customer receipts.
 
 > **Live Web Demo**: [https://smart-canteen.streamlit.app](https://smart-canteen.streamlit.app)  
-> *(Note: On the free Streamlit Community Cloud CPU container, the app may operate in a lighter detection fallback mode; full multi-item GPU detection runs best locally on desktop workstations).*
+> *(Note: On the free cloud the app may run in a lighter detection mode; full multi-item detection runs best locally on a desktop workstation).*
 
 ---
 
@@ -92,11 +92,11 @@ flowchart TD
 
 ## 📊 Dataset & Provenance
 
-The model is trained on a curated collection of **3,738 images across 14 target classes** (13 canteen dishes + 1 negative background class), split 70% train / 15% val / 15% test with a deterministic seed of `42`.
+The model is trained on a curated collection of **3,738 images across 14 classes (13 dishes + not_food)**: `burger`, `chai`, `chole_bhature`, `fried_rice`, `idli`, `jalebi`, `masala_dosa`, `momos`, `not_food`, `pav_bhaji`, `pizza`, `poha`, `samosa`, and `vada_pav`.
 
 - **Public Benchmark**: Kaggle [Indian Food Classification](https://www.kaggle.com/datasets/l33tc0d3r/indian-food-classification) (`l33tc0d3r/indian-food-classification`), providing 11 classes: `masala_dosa`, `idli`, `chole_bhature`, `pav_bhaji`, `momos`, `chai`, `jalebi`, `samosa`, `pizza`, `burger`, `fried_rice`.
 - **Custom Campus Canteen Photos**: Self-collected images for regional favorites and negative backgrounds: `vada_pav` (60 images), `poha` (60 images), and `not_food` (~50 images).
-- **Split Distribution**:
+- **Split Distribution (Seed 42)**:
   - **Train Set (70%)**: 2,611 images
   - **Validation Set (15%)**: 555 images
   - **Held-Out Test Set (15%)**: 572 images
@@ -107,17 +107,51 @@ The model is trained on a curated collection of **3,738 images across 14 target 
 
 ## 🏆 Model Benchmark & Evaluation Results
 
-All three architectures were evaluated on the **572-image held-out test split** using the exact same preprocessing and normalization:
+All architectures were evaluated on the **572-image held-out test split** using identical input sizing (224x224) and ImageNet normalization. Results match the exact experimental metrics recorded in [model_comparison.csv](docs/results/model_comparison.csv):
 
 | Model Architecture | Parameters | Disk Size | Top-1 Accuracy | Top-3 Accuracy | Macro F1-Score | CPU Latency | GPU Latency | Status |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline CNN (from scratch)** | 0.39 M | 1.56 MB | 66.43% | 88.46% | 55.24% | 12.40 ms | 3.10 ms | Baseline |
-| **MobileNetV3-Large (Fine-Tuned)** | **4.22 M** | **16.29 MB** | **93.71%** | **98.08%** | **92.82%** | **20.65 ms** | **6.15 ms** | **Deployed Production Model** |
-| **EfficientNet-B0 (Fine-Tuned)** | 4.03 M | 15.54 MB | 93.71% | 98.43% | 90.98% | 28.37 ms | 8.42 ms | Comparison Model |
+| **Baseline CNN (scratch)** | 0.39 M | 1.56 MB | 66.43% | 88.46% | 55.24% | 12.40 ms | 3.10 ms | Baseline |
+| **MobileNetV3-Large** | **4.22 M** | **16.29 MB** | **93.71%** | **98.08%** | **92.82%** | **20.65 ms** | **6.15 ms** | **Deployed Model** |
+| **EfficientNet-B0** | 4.03 M | 15.54 MB | 93.71% | 98.43% | 90.98% | 28.37 ms | 8.42 ms | Comparison |
 | **MobileNetV3-Large (ONNX INT8)** | 4.22 M | 4.23 MB | 93.42% | 98.01% | 92.40% | 4.40 ms | N/A | Edge Optimized |
 
 ### Why MobileNetV3-Large Was Selected:
-While EfficientNet-B0 achieved identical Top-1 accuracy (93.71%), MobileNetV3-Large delivered a **higher Macro-F1 score (92.82% vs 90.98%)** across under-represented classes and demonstrated **37% faster CPU inference (20.65 ms vs 28.37 ms)**, making it optimal for budget canteen POS hardware without discrete GPUs.
+While EfficientNet-B0 achieved identical Top-1 accuracy (93.71%), MobileNetV3-Large delivered a **higher Macro-F1 score (92.82% vs 90.98%)** across under-represented classes and demonstrated **37% lower CPU latency (20.65 ms vs 28.37 ms)**, making it optimal for budget canteen POS hardware without discrete GPUs.
+
+---
+
+## 📸 Sample Outputs
+
+### 1. Training & Convergence Dynamics
+![Training Curves](docs/results/training_curves.png)
+*Figure 1: Training and validation loss convergence and accuracy progression across warmup and fine-tuning epochs.*
+
+### 2. Confusion Matrix (MobileNetV3-Large, 572 test images)
+![Confusion Matrix](docs/results/confusion_matrix_mobilenetv3-large.png)
+*Figure 2: Normalized confusion matrix across all 14 classes evaluated on the 572-image held-out test split.*
+
+### 3. Model Explainability via Grad-CAM
+![Grad-CAM Samples](docs/results/gradcam_samples.png)
+*Figure 3: Class activation heatmaps confirming feature representations are focused on core dish textures rather than background plates.*
+
+### 4. Error Analysis & Misclassified Examples
+![Misclassified Examples](docs/results/misclassified_examples.png)
+*Figure 4: Analysis of edge-case misclassifications on challenging test samples.*
+
+### 5. Multi-Item Detection — SUCCESS Case (Samosa x1 + Chai x1)
+![Multi-Item Detection Success](docs/results/chai_samosa_success.png)
+*Figure 5: Successful multi-item detection on a canteen tray correctly isolating Samosa (x1) and Chai (x1) with tight bounding proposals and billing line items.*
+
+### 6. Multi-Item Detection — FAILURE Case & Cashier Verification
+![Multi-Item Detection Failure](docs/results/annotated_samosa_chai_01.jpg)
+*Figure 6: The classifier labels the standing, cone-shaped samosa as Masala Dosa (52.6%, samosa 19.6%) because that styled photo differs from our training images; the cashier verification table lets the operator correct it.*
+
+![Candidate Proposal Debug View](docs/results/debug_samosa_chai_01.jpg)
+*Figure 7: Debug inspection view displaying all raw proposal candidates, confidence scores, proposal engine label (YOLO-World), and rejected background surfaces.*
+
+> **Note on Sample Photos**:  
+> The two sample photos are stock images used only for testing; they are not part of the training data. Results on individual photos are examples, not an accuracy measure. The measured test accuracy is 93.71% (top-1) on 572 held-out images of single dishes.
 
 ---
 
@@ -140,6 +174,7 @@ smart-canteen/
 ├── .gitignore                         # Git exclusion rules (safeguards model weights)
 ├── DATASET.md                         # Detailed dataset provenance & split specification
 ├── packages.txt                       # Streamlit Cloud Debian system libraries (libgl1, libglib2.0-0)
+├── pyrightconfig.json                 # Language server extraPaths configuration for app/
 ├── README.md                          # Comprehensive project documentation (this file)
 ├── requirements.txt                   # Python package dependencies
 │
@@ -157,13 +192,19 @@ smart-canteen/
 │       └── README.txt                 # Model directory guide
 │
 ├── docs/                              # Project Documentation & Artifacts
-│   ├── screenshots/                   # Sample application interface screenshots
-│   │   └── README.txt                 # Screenshot guide & list of expected shots
-│   └── results/                       # Evaluation plots & detection benchmarks
-│       ├── annotated_samosa_chai_01.jpg # Sample multi-item detection output
-│       ├── debug_samosa_chai_01.jpg   # Sample detector candidate proposal view
-│       ├── model_comparison.csv       # Benchmark results table across models
-│       └── README.txt                 # Results guide
+│   ├── results/                       # Evaluation plots & detection benchmarks
+│   │   ├── annotated_samosa_chai_01.jpg # Sample multi-item detection output
+│   │   ├── chai_samosa_success.png    # Multi-item detection success case
+│   │   ├── confusion_matrix_mobilenetv3-large.png # Confusion matrix on test split
+│   │   ├── debug_samosa_chai_01.jpg   # Sample detector candidate proposal view
+│   │   ├── gradcam_samples.png        # Grad-CAM heatmap samples across classes
+│   │   ├── misclassified_examples.png # Error analysis of misclassified test images
+│   │   ├── model_comparison.csv       # Benchmark results table across models
+│   │   ├── README.txt                 # Results directory guide
+│   │   └── training_curves.png        # Training loss & accuracy curves
+│   └── screenshots/                   # Sample application interface screenshots
+│       ├── chai_samosa_success.png    # Live cashier detection capture
+│       └── README.txt                 # Screenshot guide & list of missing shots
 │
 ├── feedback/                          # Active learning cashier feedback directory
 │   └── .gitkeep
@@ -174,6 +215,7 @@ smart-canteen/
 │       └── capstone_training_colab_archive.ipynb # Archived Colab notebook (superseded)
 │
 ├── scripts/                           # Utility & Packaging Scripts
+│   ├── check_readme_links.py          # Relative markdown link and case-sensitivity verifier
 │   ├── download_data_local.py         # Optional script to download raw Kaggle dataset locally
 │   ├── make_submission_zip.py         # Automated capstone submission packaging utility
 │   └── verify_preprocessing_and_fps.py# Preprocessing parity check & latency benchmark
@@ -261,6 +303,9 @@ python tests/test_acceptance_criteria.py
 # Run preprocessing parity check & FPS benchmark
 python scripts/verify_preprocessing_and_fps.py
 
+# Verify documentation relative links & asset existence
+python scripts/check_readme_links.py
+
 # Evaluate real-world photos against ground truth expected.csv
 python tests/evaluate_real_photos.py
 ```
@@ -305,29 +350,9 @@ To extend the system to recognize a new food dish (e.g. `dosa_plain`):
 
 ---
 
-## 📸 Sample Output Screenshots & Results
-
-### 1. Multi-Item Canteen Bill & Receipt
-![Multi-Item Detection Output](docs/results/annotated_samosa_chai_01.jpg)
-*Figure 1: Automated multi-item detection on a real canteen photo identifying Samosa (#1) and Chai (#2) with individual confidence scores and bounding boxes.*
-
-### 2. Candidate Proposal Debug View
-![Detector Debug Inspection](docs/results/debug_samosa_chai_01.jpg)
-*Figure 2: Detailed debug view showing all candidate proposal boxes, classification confidence, proposal engine label (YOLO-World), and rejected background surfaces.*
-
-> **Additional Screenshots**:
-> Drop your captured UI screenshots into `docs/screenshots/` according to [docs/screenshots/README.txt](docs/screenshots/README.txt):
-> - `docs/screenshots/01_single_dish_detection.png` *(Single dish detection view)*
-> - `docs/screenshots/02_multi_item_canteen_bill.png` *(Full bill summary table)*
-> - `docs/screenshots/03_detector_debug_view.png` *(Debug proposal breakdown)*
-> - `docs/screenshots/04_gradcam_explainability.png` *(Grad-CAM heatmap overlay)*
-> - `docs/screenshots/05_live_camera_demo.png` *(OpenCV desktop live HUD)*
-
----
-
 ## ⚠️ Known Limitations (Honest Assessment)
 
-1. **Limited Class Domain**: The system currently recognizes **14 classes** (13 food dishes + 1 background rejection class). Food items outside these 14 categories cannot be accurately identified and may be rejected as unknown or misclassified.
+1. **Limited Class Domain**: The system currently recognizes **14 classes (13 dishes + not_food)**. Food items outside these 14 categories cannot be accurately identified and may be rejected as unknown or misclassified.
 2. **Imbalanced Custom Classes**: While Kaggle classes have 300–400 images each, the custom regional classes (`vada_pav` with 60 photos, `poha` with 60 photos, and `not_food` with ~50 photos) have comparatively smaller sample sizes, leading to lower generalization in unusual lighting.
 3. **Overlapping & Touching Items**: The detect-then-classify pipeline relies on region proposals. If two samosas physically overlap significantly or if a dish is obscured by a cup, bounding box separation can merge them or truncate edges, leading to misclassification.
 4. **Single Confidence Threshold**: The system applies a uniform confidence threshold of **60%** (`0.60`) across all dishes. Some visually variable dishes (such as samosas with diverse crust colors or chutneys) can score between 50% and 58% and be rejected unless the threshold is manually lowered.
