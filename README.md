@@ -1,326 +1,365 @@
-# 🍽️ Smart Canteen Billing Assistant: Food Image Recognition using Transfer Learning
+# Smart Canteen Billing Assistant: Food Image Recognition with Transfer Learning
 
-**Department of Electronics Engineering, Ramdeobaba University (RBU), Nagpur**  
-**Course:** Deep Learning Lab Capstone Project (20 Marks) | **Semester:** V  
-**Team Members:**
-1. **Atharva Korde (Roll No: 08)** — *Dataset collection, curation, merge pipeline & preprocessing*
-2. **Dhruv Khedkar (Roll No: 13)** — *Model development, transfer learning fine-tuning & training*
-3. **Divyam Sharma (Roll No: 14)** — *Evaluation benchmarks, confusion matrices & local dataset extension*
-4. **Divyatwa Kiranpure (Roll No: 15)** — *Streamlit application, live camera OpenCV demo, explainability (Grad-CAM) & report/viva*
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://smart-canteen.streamlit.app)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg)](https://pytorch.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
----
+An end-to-end deep learning vision application and point-of-sale billing assistant designed for college canteens and cafeterias. By leveraging transfer learning with a fine-tuned MobileNetV3-Large convolutional neural network and open-vocabulary region proposals (YOLO-World / FastSAM / Spatial Heuristics), the system detects single or multiple Indian food dishes on a plate or tray from photos or live camera feeds, classifies them across 14 target classes (13 canteen dishes + 1 background rejection class), calculates prices and nutritional energy (calories), and automatically generates customer receipts.
 
-## 📌 Table of Contents
-1. [Project Overview & Key Innovations](#-project-overview--key-innovations)
-2. [Project Architecture & Directory Structure](#-project-architecture--directory-structure)
-3. [Section A: One-Time Setup on Laptop (RTX 5050 CUDA 12.8 & Python 3.12)](#-section-a-one-time-setup-on-laptop)
-4. [Section B: Kaggle API Token Setup (Colab Secrets & Local)](#-section-b-kaggle-api-token-setup)
-5. [Section C: Training on Google Colab (Free T4 GPU)](#-section-c-training-on-google-colab-free-t4-gpu)
-6. [Section D: Moving Trained Weights & Running the Demos](#-section-d-moving-trained-weights--running-the-demos)
-7. [Section E: How to Photograph Custom Canteen Data (vada_pav, poha & not_food)](#-section-e-how-to-photograph-custom-canteen-data)
-8. [Section F: Viva Voce Preparation (10 Questions & Answers)](#-section-f-viva-voce-preparation-10-qas)
-9. [Section G: Team Work Distribution](#-section-g-team-work-distribution)
+> **Live Web Demo**: [https://smart-canteen.streamlit.app](https://smart-canteen.streamlit.app)  
+> *(Note: On the free Streamlit Community Cloud CPU container, the app may operate in a lighter detection fallback mode; full multi-item GPU detection runs best locally on desktop workstations).*
 
 ---
 
-## 🌟 Project Overview & Key Innovations
+## 👥 Project & Team Information
 
-In busy college canteens and office cafeterias, manual billing causes long queues and human accounting mistakes. The **Smart Canteen Billing Assistant** solves this with an end-to-end computer vision billing system:
-
-1. **Automated Vision Billing:** A customer or cashier shows a food plate to a camera or uploads an image.
-2. **Lightweight Deep Neural Networks:** A fine-tuned **MobileNetV3-Large** or **EfficientNet-B0** classifies the image into one of **16 categories** (15 delicious canteen dishes + a dedicated `not_food` background rejection class).
-3. **Automated POS Tally & Nutrition:** Looks up real-time canteen rates from `menu.csv` and automatically tallies an interactive **running bill** with monetary total (₹) and **nutritional energy estimate** (kcal).
-4. **Live Real-Time Camera Detection:** An OpenCV live camera demo (`app/live_demo.py`) with 10-frame probability smoothing, center-cropping, and HUD overlays running directly on laptop GPU/CPU, plus a browser live camera tab via `streamlit-webrtc`.
-5. **Two-Tier Safety Rejection (`not_food` + Threshold):**
-   - If the model identifies `not_food` (empty plates, hands, trays, tables, cutlery), or if confidence is below the safety threshold (default `60%`), the system displays `"No food / Unknown food"` (red overlay).
-   - **Financial Protection:** The item is strictly blocked from being added to the customer's bill.
-6. **Explainable AI (Grad-CAM):** Displays an activation heatmap over the dish to verify whether the AI focused on the food texture (e.g., golden crust of samosa, crispy lace of dosa) rather than the plate background.
-7. **ONNX Runtime Optimization:** Supports both PyTorch (`.pth`) and ONNX (`.onnx`) runtimes with sub-30ms inference on consumer laptops and edge POS hardware.
-8. **Human-in-the-Loop Active Feedback:** Cashiers can log misclassified photos to `feedback/<class>/` for active learning and future retraining.
-
-### The 16 Supported Categories
-`burger`, `chai`, `chole_bhature`, `french_fries`, `fried_rice`, `ice_cream`, `idli`, `jalebi`, `masala_dosa`, `momos`, `not_food`, `pav_bhaji`, `pizza`, `poha`, `samosa`, `vada_pav`
-
-*(Note: `not_food` has Price ₹0 and 0 kcal, and can never be added to a bill).*
+- **Institution**: Ramdeobaba University (RBU), Nagpur
+- **Program**: B.Tech in Electronics Engineering | Capstone Project (Deep Learning Lab)
+- **Project Title**: Smart Canteen Billing Assistant — Food Image Recognition with Transfer Learning
+- **Project Team**:
+  1. **Atharva Korde** (Roll No: 08) — *Dataset Collection, Preprocessing Pipeline & Multi-Item Detection Integration*
+  2. **Dhruv Khedkar** (Roll No: 13) — *Model Architectures, Transfer Learning Training & Hyperparameter Tuning*
+  3. **Divyam Sharma** (Roll No: 14) — *Benchmarking Metrics, Real-World Photo Evaluation & Local Dataset Extension*
+  4. **Divyatwa Kiranpure** (Roll No: 15) — *Streamlit UI Application, OpenCV Live Camera HUD & Explainable AI (Grad-CAM)*
 
 ---
 
-## 📂 Project Architecture & Directory Structure
+## 📌 Problem Statement
+
+In bustling university canteens and institutional cafeterias during peak lunch and break hours, manual cashier billing creates long queues, pricing inconsistencies, and billing delays. Traditional barcode and RFID tagging solutions are physically impractical for unpackaged, freshly cooked Indian foods (such as samosas, dosas, poha, and idlis). 
+
+The **Smart Canteen Billing Assistant** addresses this challenge through automated computer vision:
+- Instantly recognizes dishes placed on trays or tables from standard camera captures.
+- Detects multiple distinct items simultaneously (e.g. Samosa + Chai).
+- Rejects non-food objects (empty plates, hands, cutlery, tables) to avoid false financial charges.
+- Generates itemized bills with monetary totals (₹) and dietary energy estimates (kcal).
+
+---
+
+## 🌟 Key Features
+
+1. **Multi-Item Food Detection (Detect-then-Classify)**:
+   - Uses Ultralytics YOLO-World open-vocabulary region proposals to extract tight bounding boxes for food items, plates, cups, and bowls.
+   - Applies FastSAM (Segment Anything) and multi-scale spatial heuristics as resilient fallbacks.
+   - Enforces 5% context padding and gray-fills overlapping peer bounding boxes to guarantee the classifier never evaluates mixed dishes in a single crop.
+   - Applies class-agnostic Non-Maximum Suppression (NMS) and composite container suppression.
+
+2. **Accurate Transfer Learning Classifier**:
+   - Production backbone: **MobileNetV3-Large** achieving **93.71% Top-1** and **98.08% Top-3** accuracy on the held-out test split.
+   - Fast inference latency: **20.65 ms on CPU** and **6.15 ms on NVIDIA GPU**.
+
+3. **Two-Tier Financial Safety Rejection**:
+   - **Tier 1 (Explicit Class)**: Dedicated `not_food` background class trained on empty canteen surfaces, hands, trays, and cutlery.
+   - **Tier 2 (Confidence Threshold)**: Rejects any prediction falling below the 60% confidence threshold (`threshold = 0.60`). Items failing safety checks are strictly blocked from being billed.
+
+4. **Automated Point-of-Sale (POS) Billing Engine**:
+   - Aggregates multiple occurrences into single line items with quantities (e.g. 2x Samosa -> Qty: 2, Rs. 40, 520 kcal).
+   - Generates thermal printer ASCII receipts, formatted HTML receipts, and downloadable accounting CSV files.
+
+5. **Explainable AI with Grad-CAM**:
+   - Integrated Gradient-weighted Class Activation Mapping (Grad-CAM) visualizes convolutional feature heatmaps, confirming the network attends to authentic food textures rather than background plates.
+
+6. **Desktop OpenCV Live Camera Demo (`app/live_demo.py`)**:
+   - Decoupled asynchronous worker thread running detection and classification in the background while keeping camera capture and UI HUD rendering smooth at **30–60 FPS**.
+
+---
+
+## 🔄 System Pipeline Architecture
+
+```mermaid
+flowchart TD
+    A["Camera Capture / Uploaded Image"] --> B["Image Ingestion & EXIF Orientation"]
+    B --> C["Region Proposal Generation"]
+    
+    subgraph Proposals ["Tiered Region Proposals"]
+        C1["YOLO-World (Open-Vocabulary Prompts)"]
+        C2["FastSAM (Segmentation Fallback)"]
+        C3["Spatial & Otsu Heuristics (Last Resort)"]
+    end
+    
+    C --> Proposals
+    Proposals --> D["Tight Crop & Context Masking (5% Pad + Gray Peer Masking)"]
+    D --> E["MobileNetV3-Large Classifier (224x224 Normalized)"]
+    E --> F["Two-Tier Safety Filter (Confidence >= 60% & Class != 'not_food')"]
+    F --> G["Class-Agnostic NMS & Container Disambiguation"]
+    G --> H["Cashier Verification Interface & Grad-CAM Heatmap"]
+    H --> I["Canteen Billing Engine (Prices & Calories from menu.csv)"]
+    I --> J["Customer Receipt (Text / HTML / CSV Export)"]
+```
+
+---
+
+## 📊 Dataset & Provenance
+
+The model is trained on a curated collection of **3,738 images across 14 target classes** (13 canteen dishes + 1 negative background class), split 70% train / 15% val / 15% test with a deterministic seed of `42`.
+
+- **Public Benchmark**: Kaggle [Indian Food Classification](https://www.kaggle.com/datasets/l33tc0d3r/indian-food-classification) (`l33tc0d3r/indian-food-classification`), providing 11 classes: `masala_dosa`, `idli`, `chole_bhature`, `pav_bhaji`, `momos`, `chai`, `jalebi`, `samosa`, `pizza`, `burger`, `fried_rice`.
+- **Custom Campus Canteen Photos**: Self-collected images for regional favorites and negative backgrounds: `vada_pav` (60 images), `poha` (60 images), and `not_food` (~50 images).
+- **Split Distribution**:
+  - **Train Set (70%)**: 2,611 images
+  - **Validation Set (15%)**: 555 images
+  - **Held-Out Test Set (15%)**: 572 images
+
+> For the complete data specification, per-class counts, Kaggle CLI download commands, and folder mapping, see [DATASET.md](DATASET.md).
+
+---
+
+## 🏆 Model Benchmark & Evaluation Results
+
+All three architectures were evaluated on the **572-image held-out test split** using the exact same preprocessing and normalization:
+
+| Model Architecture | Parameters | Disk Size | Top-1 Accuracy | Top-3 Accuracy | Macro F1-Score | CPU Latency | GPU Latency | Status |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Baseline CNN (from scratch)** | 0.39 M | 1.56 MB | 66.43% | 88.46% | 55.24% | 12.40 ms | 3.10 ms | Baseline |
+| **MobileNetV3-Large (Fine-Tuned)** | **4.22 M** | **16.29 MB** | **93.71%** | **98.08%** | **92.82%** | **20.65 ms** | **6.15 ms** | **Deployed Production Model** |
+| **EfficientNet-B0 (Fine-Tuned)** | 4.03 M | 15.54 MB | 93.71% | 98.43% | 90.98% | 28.37 ms | 8.42 ms | Comparison Model |
+| **MobileNetV3-Large (ONNX INT8)** | 4.22 M | 4.23 MB | 93.42% | 98.01% | 92.40% | 4.40 ms | N/A | Edge Optimized |
+
+### Why MobileNetV3-Large Was Selected:
+While EfficientNet-B0 achieved identical Top-1 accuracy (93.71%), MobileNetV3-Large delivered a **higher Macro-F1 score (92.82% vs 90.98%)** across under-represented classes and demonstrated **37% faster CPU inference (20.65 ms vs 28.37 ms)**, making it optimal for budget canteen POS hardware without discrete GPUs.
+
+---
+
+## 🛠️ Tech Stack
+
+- **Deep Learning Framework**: PyTorch 2.0+, Torchvision
+- **Computer Vision & Detection**: OpenCV (headless/desktop), Ultralytics YOLO-World, PIL (Pillow)
+- **Explainability**: PyTorch Grad-CAM
+- **Edge Deployment**: ONNX Runtime (CPU/INT8 quantization)
+- **Web UI & Streaming**: Streamlit, Streamlit-WebRTC, PyAV
+- **Data & Tables**: Pandas, NumPy
+
+---
+
+## 📁 Project Directory Structure
 
 ```text
 smart-canteen/
-├── README.md                      # Comprehensive guide, setup manual & viva handbook (this file)
-├── requirements.txt               # Laptop dependencies (PyTorch installed via cu128 wheel)
-├── .gitignore                     # Ignores weights, datasets, .env, caches, outputs
-├── .env.example                   # Template for local Kaggle credentials
-├── notebooks/
-│   └── capstone_training.ipynb    # Complete Google Colab notebook (GPU training, 14 Classes)
-├── scripts/
-│   └── download_data_local.py     # Optional script to inspect Kaggle dataset locally
-├── app/
-│   ├── app.py                     # Streamlit web app with Upload, Snapshot & WebRTC Live tabs
-│   ├── live_demo.py               # Fast OpenCV desktop live camera app (GPU/CPU, HUD & keys)
-│   ├── predictor.py               # Shared prediction, preprocessing, smoothing & menu logic
-│   ├── menu.csv                   # 14 Classes with realistic prices (INR) & calories
+├── .env.example                       # Template for Kaggle API credentials
+├── .gitignore                         # Git exclusion rules (safeguards model weights)
+├── DATASET.md                         # Detailed dataset provenance & split specification
+├── packages.txt                       # Streamlit Cloud Debian system libraries (libgl1, libglib2.0-0)
+├── README.md                          # Comprehensive project documentation (this file)
+├── requirements.txt                   # Python package dependencies
+│
+├── app/                               # Production Application Package
+│   ├── __init__.py                    # App package initialization
+│   ├── app.py                         # Streamlit multi-page web application
+│   ├── billing.py                     # Canteen billing engine, aggregation & receipt generator
+│   ├── detector.py                    # Multi-item region detector (YOLO-World + Heuristics + NMS)
+│   ├── live_demo.py                   # High-speed OpenCV live camera desktop demo
+│   ├── menu.csv                       # 14 classes with rates (INR) and calories (kcal)
+│   ├── predictor.py                   # Shared MobileNetV3 inference & Grad-CAM engine
 │   └── model/
-│       ├── classes.json           # Ordered JSON list of the 16 category names
-│       └── README.txt             # Place downloaded mobilenetv3.pth / food_model.onnx here
-├── feedback/                      # Stores misclassified photos submitted via the app
+│       ├── classes.json               # 14 target class names list (185 bytes)
+│       ├── mobilenetv3.pth            # Trained PyTorch model weights (16.29 MB)
+│       └── README.txt                 # Model directory guide
+│
+├── docs/                              # Project Documentation & Artifacts
+│   ├── screenshots/                   # Sample application interface screenshots
+│   │   └── README.txt                 # Screenshot guide & list of expected shots
+│   └── results/                       # Evaluation plots & detection benchmarks
+│       ├── annotated_samosa_chai_01.jpg # Sample multi-item detection output
+│       ├── debug_samosa_chai_01.jpg   # Sample detector candidate proposal view
+│       ├── model_comparison.csv       # Benchmark results table across models
+│       └── README.txt                 # Results guide
+│
+├── feedback/                          # Active learning cashier feedback directory
 │   └── .gitkeep
-└── outputs/                       # Screenshots saved from the live camera demo
+│
+├── notebooks/                         # Training & Experimentation Notebooks
+│   ├── capstone_training_kaggle.ipynb # Final Kaggle training notebook (14 classes, T4 GPU)
+│   └── archive/
+│       └── capstone_training_colab_archive.ipynb # Archived Colab notebook (superseded)
+│
+├── scripts/                           # Utility & Packaging Scripts
+│   ├── download_data_local.py         # Optional script to download raw Kaggle dataset locally
+│   ├── make_submission_zip.py         # Automated capstone submission packaging utility
+│   └── verify_preprocessing_and_fps.py# Preprocessing parity check & latency benchmark
+│
+├── src/                               # Source Data Preprocessing
+│   └── prepare_own_photos.py          # Cleans and standardizes custom photos into own_photos.zip
+│
+└── tests/                             # Automated Test Suites
+    ├── evaluate_real_photos.py        # Real photo evaluation script against expected.csv
+    ├── test_acceptance_criteria.py   # Acceptance criteria validation suite
+    ├── test_billing.py                # Unit tests for quantity billing & receipt math
+    └── real_photos/                   # Real-world test photographs
+        ├── expected.csv               # Ground truth labels and counts
+        └── samosa_chai_01.jpg         # Sample real-world test image
 ```
 
 ---
 
-## 💻 Section A: One-Time Setup on Laptop
+## 💻 Local Installation Guide (Windows PowerShell)
 
-> [!IMPORTANT]  
-> **NVIDIA RTX 5050 GPU (CUDA 12.8) & Python 3.12:**  
-> PyTorch and torchvision are **not** listed as standard lines in `requirements.txt`. They must be installed first using the official PyTorch CUDA 12.8 wheel URL before installing the remaining packages.
-
-### Step 1: Open your terminal
-On Windows, open PowerShell or Command Prompt, and navigate to the project directory:
+### Step 1: Clone the Repository
 ```powershell
-cd C:\Projects\smart-canteen
+git clone https://github.com/AtharvaKorde7/smart-canteen.git
+cd smart-canteen
 ```
 
-### Step 2: Create and activate a Python 3.12 virtual environment
+### Step 2: Create and Activate Python Virtual Environment
 ```powershell
-# Create virtual environment named 'venv' with Python 3.12
-py -3.12 -m venv venv
+# Create virtual environment
+python -m venv venv
 
-# Activate virtual environment on Windows
-venv\Scripts\activate
+# Activate virtual environment
+.\venv\Scripts\Activate.ps1
 ```
-*(You will see `(venv)` appear at the beginning of your command line prompt).*
 
-### Step 3: Install PyTorch with CUDA 12.8 support (for NVIDIA RTX 5050)
-```powershell
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-```
-*(If you do not have an NVIDIA GPU or want CPU-only, standard `pip install torch torchvision` can also be used).*
+### Step 3: Install PyTorch with Hardware Acceleration
+- **For NVIDIA GPU workstations (e.g. RTX 3050 / 4050 / 5050 with CUDA 12.8)**:
+  ```powershell
+  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+  ```
+- **For CPU-only computers**:
+  ```powershell
+  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+  ```
 
-### Step 4: Install the remaining project dependencies
+### Step 4: Install Project Dependencies
 ```powershell
 pip install -r requirements.txt
 ```
-This installs `streamlit`, `opencv-python`, `streamlit-webrtc`, `av`, `onnxruntime`, `grad-cam`, `pillow`, `pandas`, `numpy`, and `matplotlib`.
 
 ---
 
-## 🔑 Section B: Kaggle API Token Setup
+## 🚀 How to Run the Application
 
-To allow automated dataset downloading without hardcoding sensitive keys into git or code:
-
-### How to get your Kaggle Token
-1. Go to [https://www.kaggle.com](https://www.kaggle.com) and sign in.
-2. Click your profile avatar in the top-right corner $\rightarrow$ **Settings**.
-3. Scroll down to the **API** section and click **Create New Token**.
-4. A token file `kaggle.json` will be downloaded containing your username and key.
-
-### B1. Setting it up on Google Colab (Recommended)
-1. Open `notebooks/capstone_training.ipynb` in Google Colab.
-2. In the left vertical toolbar, click the **Secrets** icon (🔑 Key symbol).
-3. Click **Add new secret**:
-   - **Name:** `KAGGLE_API_TOKEN`
-   - **Value:** Paste your Kaggle API key or token string.
-4. Toggle **Notebook access** to **ON**.
-5. The notebook reads this automatically using `google.colab.userdata`.
-
-### B2. Setting it up Locally for `scripts/download_data_local.py` (Optional)
-1. Copy `.env.example` to `.env`:
-   ```powershell
-   copy .env.example .env
-   ```
-2. Open `.env` and paste your token:
-   ```env
-   KAGGLE_API_TOKEN=your_actual_token_here
-   ```
-3. `.gitignore` ensures `.env` is never committed.
-
----
-
-## 🚀 Section C: Training on Google Colab (Free T4 GPU)
-
-All heavy computation (dataset downloading, image cleaning, merging 14 Classes, 70/15/15 splitting, CNN training, and ONNX conversion) is automated inside `notebooks/capstone_training.ipynb`.
-
-### Step-by-Step Colab Instructions:
-1. **Upload Notebook:** Go to [Google Colab](https://colab.research.google.com/), click **Upload**, and select `notebooks/capstone_training.ipynb`.
-2. **Enable GPU:**
-   - In Colab's menu, click **Runtime** $\rightarrow$ **Change runtime type**.
-   - Under **Hardware accelerator**, select **T4 GPU** and click **Save**.
-3. **Upload Custom Photos (`own_photos.zip`):**
-   - In your Google Drive, create a folder named `capstone`.
-   - Take custom photos for `vada_pav`, `poha`, and `not_food` (empty plates, hands, tables, trays, cutlery, backgrounds; 60–100 photos each).
-   - Zip them into `own_photos.zip` (containing `vada_pav/`, `poha/`, and `not_food/` subfolders).
-   - Upload to `/content/drive/MyDrive/capstone/own_photos.zip`.
-4. **Run All Cells Sequentially:**
-   - Click **Runtime** $\rightarrow$ **Run all** (or execute cells one by one from top to bottom).
-   - Authorize Google Drive when prompted.
-
-### Artifacts generated in your Google Drive (`/MyDrive/capstone/`):
-- `mobilenetv3.pth` — Trained weights of MobileNetV3-Large (14 Classes).
-- `classes.json` — The 16 class index-to-name mapping.
-- `food_model.onnx` — High-performance ONNX model.
-- `food_model_int8.onnx` — Dynamically quantized INT8 model for embedded hardware.
-- `dataset_split.zip` — The 70/15/15 dataset archive (cached for fast reruns).
-- `training_curves.png` — Loss and accuracy plots.
-- `confusion_matrix_mobilenetv3-large.png` — High-resolution confusion matrix.
-- `model_comparison.csv` — Parameters, file size, accuracy, and latency benchmarks.
-- `gradcam_samples.png` — Visual Explainable AI overlays.
-
----
-
-## 🖥️ Section D: Moving Trained Weights & Running the Demos
-
-Once training is complete in Colab:
-
-### Step 1: Download weights from Google Drive
-Open Google Drive in your web browser, navigate to the `capstone` folder, and download:
-1. `mobilenetv3.pth`
-2. `classes.json` (and optionally `food_model.onnx`)
-
-### Step 2: Copy to `app/model/`
-Place the downloaded files into:
-```text
-smart-canteen/app/model/
-├── README.txt
-├── classes.json
-├── mobilenetv3.pth
-└── food_model.onnx      # (optional for ONNX backend)
-```
-
----
-
-### Demo 1: Streamlit Interactive Web Application
-Run the Streamlit app with photo upload, snapshot camera, and browser live stream:
+### Option A: Streamlit Interactive Web Application
 ```powershell
 streamlit run app/app.py
 ```
-Your browser will open `http://localhost:8501`.
-- **📁 Upload Photo tab:** Browse and test food photos from your laptop.
-- **📸 Webcam Snapshot tab:** Built-in snapshot camera for instant point-and-click capture.
-- **🎥 Live Camera Stream tab:** Real-time in-browser video classification via `streamlit-webrtc`.
-- **Safety check:** If non-food or confidence is below threshold, shows `"No food / Unknown food"` and prevents billing.
-- **Explainability:** Expand **Grad-CAM Heatmap** to see the neural attention map.
+Opens in your browser at `http://localhost:8501`. Features:
+- **Upload Photo Tab**: Drag-and-drop any food image (JPG, PNG, WEBP), view multi-item bounding boxes, inspect candidates via Debug View, generate receipts.
+- **Webcam Snapshot Tab**: Take a live snapshot using your laptop camera.
+- **Live Camera Stream Tab**: Continuous browser streaming via WebRTC.
+
+### Option B: High-Speed Desktop Live Camera Demo (`app/live_demo.py`)
+```powershell
+python app/live_demo.py --camera 0
+```
+#### Interactive Live Hotkeys:
+- <kbd>SPACE</kbd> : Add all currently detected dishes to the customer's running bill.
+- <kbd>C</kbd> : Clear the current bill.
+- <kbd>S</kbd> : Save a screenshot of the frame and generate a text receipt.
+- <kbd>D</kbd> : Toggle candidate detection debug view.
+- <kbd>G</kbd> : Compute and display Grad-CAM activation heatmap overlay.
+- <kbd>M</kbd> : Toggle horizontal mirror mode.
+- <kbd>Q</kbd> : Quit demo.
+
+### Option C: Running the Test Suites
+```powershell
+# Run billing arithmetic & receipt unit tests
+python tests/test_billing.py
+
+# Run acceptance criteria verification suite
+python tests/test_acceptance_criteria.py
+
+# Run preprocessing parity check & FPS benchmark
+python scripts/verify_preprocessing_and_fps.py
+
+# Evaluate real-world photos against ground truth expected.csv
+python tests/evaluate_real_photos.py
+```
 
 ---
 
-### Demo 2: Fast OpenCV Live Camera Demo (GPU Accelerated)
-For maximum FPS, low latency, and direct NVIDIA GPU acceleration:
+## 🎓 How to Reproduce Training on Kaggle
 
-#### Run with PyTorch (uses NVIDIA RTX 5050 GPU via CUDA):
-```powershell
-python app/live_demo.py --backend torch
-```
+To reproduce model training from scratch using a free **NVIDIA Tesla T4 GPU** on Kaggle:
 
-#### Run with ONNX Runtime:
-```powershell
-python app/live_demo.py --backend onnx
-```
-
-#### Additional options:
-```powershell
-# Custom confidence threshold (e.g. 70%) and external camera index 1:
-python app/live_demo.py --backend torch --threshold 0.70 --camera 1
-```
-
-#### Keyboard Controls in Live Demo:
-| Key | Action |
-| :---: | :--- |
-| **`[SPACE]`** | **Add current food item to bill** (blocked if `not_food` or below threshold) |
-| **`[C]`** | **Clear running bill** back to ₹0 |
-| **`[S]`** | **Save screenshot** to `outputs/` folder |
-| **`[Q]` / `[ESC]`** | **Quit live demo** and cleanly release webcam |
+1. Open [Kaggle](https://www.kaggle.com) and create a **New Notebook**.
+2. Under **File -> Import Notebook**, upload `notebooks/capstone_training_kaggle.ipynb`.
+3. In the right-hand **Notebook Settings** panel:
+   - **Accelerator**: Select `GPU T4 x1`.
+   - **Internet**: Toggle to `On`.
+4. Attach datasets:
+   - Click **+ Add Input** -> Search for `l33tc0d3r/indian-food-classification` -> Add.
+   - Attach your custom `own_photos.zip` (containing `vada_pav/`, `poha/`, `not_food/`).
+5. Run all cells in the notebook.
+6. The notebook executes 2-phase transfer learning:
+   - **Phase 1**: 5 epochs warmup (frozen backbone, Adam lr=1e-3).
+   - **Phase 2**: 12 epochs full fine-tuning (all layers, lr=1e-4, Cosine Annealing).
+7. Download the trained artifacts saved in `/kaggle/working/artifacts/`:
+   - `mobilenetv3.pth`
+   - `classes.json`
+8. Place both files into `app/model/` in your local repository.
 
 ---
 
-## 📷 Section E: How to Photograph Custom Canteen Data
+## 🍽️ How to Add a New Dish to the System
 
-To train regional canteen dishes and the negative non-food class:
+To extend the system to recognize a new food dish (e.g. `dosa_plain`):
 
-1. **Required Categories & Quantities:**
-   - `vada_pav`: 60–100 photos
-   - `poha`: 60–100 photos
-   - `not_food`: 60–100 photos (empty plates, cafeteria tables, steel trays, hands, cutlery, people, cups, wallets, cafeteria background)
-2. **Local Generalization Test Set:**
-   - Keep 15–20 separate photos per class in `local_test/` (never seen during training) to verify cafeteria lighting generalization.
-3. **Diversity is Key:**
-   - **Plates & Packaging:** Steel thalis, paper plates, disposable wraps, plastic trays.
-   - **Angles:** 90° top-down, 45° perspective, close-ups.
-   - **Lighting:** Cafeteria fluorescent lights, sunny outdoor tables, counter shadows.
-4. **Folder Organization before zipping:**
-   ```text
-   own_photos/
-   ├── vada_pav/     # 60-100 .jpg images
-   ├── poha/         # 60-100 .jpg images
-   └── not_food/     # 60-100 .jpg images (empty plates, hands, tables, trays, backgrounds)
+1. **Collect Images**: Gather at least 50–100 varied photos of the new dish.
+2. **Update Dataset**: Add the folder to your training dataset and include the new class name in `TARGET_CLASSES` in `notebooks/capstone_training_kaggle.ipynb`.
+3. **Retrain Model**: Retrain the MobileNetV3 classifier and export updated `mobilenetv3.pth` and `classes.json`.
+4. **Update Menu Pricing**: Add a new row to `app/menu.csv`:
+   ```csv
+   dosa_plain,45,210
    ```
-   Zip into `own_photos.zip` and upload to `/content/drive/MyDrive/capstone/own_photos.zip`.
+5. **Update Detection Prompts (Optional)**: If using YOLO-World, add the dish name to `PROMPT_FOOD_ITEMS` in `app/detector.py` to ensure high-recall region proposals.
 
 ---
 
-## 🎓 Section F: Viva Voce Preparation (10 Q&As)
+## 📸 Sample Output Screenshots & Results
 
-Here are the 10 most common external examiner viva questions with simple, accurate answers:
+### 1. Multi-Item Canteen Bill & Receipt
+![Multi-Item Detection Output](docs/results/annotated_samosa_chai_01.jpg)
+*Figure 1: Automated multi-item detection on a real canteen photo identifying Samosa (#1) and Chai (#2) with individual confidence scores and bounding boxes.*
 
-### Q1: What is Transfer Learning and why did you use it?
-> **Answer:** Transfer learning takes a model trained on a massive dataset (ImageNet with 1.4 million images across 1,000 categories) and repurposes its learned visual features (edges, textures, shapes) for a new task. Because food datasets in a college lab are relatively small (500 images/class), training a deep CNN from scratch leads to severe overfitting. Transfer learning enables 85%+ accuracy with fast convergence and minimal data.
+### 2. Candidate Proposal Debug View
+![Detector Debug Inspection](docs/results/debug_samosa_chai_01.jpg)
+*Figure 2: Detailed debug view showing all candidate proposal boxes, classification confidence, proposal engine label (YOLO-World), and rejected background surfaces.*
 
-### Q2: Why did you choose MobileNetV3 and EfficientNet-B0 over ResNet-50 or VGG-16?
-> **Answer:** VGG-16 (~138M params, 520MB) and ResNet-50 (~25M params, 100MB) are too heavy for low-cost canteen point-of-sale machines. MobileNetV3-Large (~5.4M params, ~20MB) and EfficientNet-B0 (~5.3M params, ~21MB) utilize **depthwise separable convolutions** and **squeeze-and-excitation blocks**, providing comparable accuracy with 80% fewer parameters and sub-30ms CPU latency.
-
-### Q3: What is the two-phase training strategy (Warmup vs Fine-Tuning)?
-> **Answer:**  
-> - **Phase 1 (Warmup):** We freeze the pretrained feature extractor backbone and train only the newly added classification head for 5 epochs with $lr = 10^{-3}$. This prevents large, random gradients in the new head from destroying pretrained filters.  
-> - **Phase 2 (Fine-Tuning):** We unfreeze all layers and train end-to-end for 12 epochs with a much smaller learning rate ($lr = 10^{-4}$) to gently adjust edge and texture filters to Indian dishes.
-
-### Q4: Why did you use Label Smoothing in Cross-Entropy Loss?
-> **Answer:** Standard cross-entropy encourages the model to be infinitely confident ($p \rightarrow 1.0$) on hard one-hot targets. Label smoothing ($0.1$) softens the target vector (e.g., $0.9$ for the true class and small probabilities for the rest). This regularizes the network and prevents overconfidence on visually ambiguous foods like poha vs fried rice.
-
-### Q5: What is Top-3 Accuracy and why is it important for food recognition?
-> **Answer:** Top-1 requires the #1 predicted class to match exactly. Top-3 accuracy checks whether the true class is within the top 3 highest probabilities. In food recognition, dishes like *vada pav* and *burger*, or *chole bhature* and *puri bhaji* share similar textures. Top-3 accuracy (>95%) provides cashier validation while maintaining robust usability.
-
-### Q6: How does the system prevent billing mistakes when non-food items appear?
-> **Answer:** We implement a **two-tier safety defense**:
-> 1. **16th Explicit `not_food` Class:** Trained on empty plates, cafeteria tables, steel trays, cutlery, hands, and backgrounds. If predicted as `not_food`, price is ₹0 and adding to bill is strictly prohibited.
-> 2. **Confidence Safety Threshold (Default 60%):** If maximum softmax probability is below 60%, the app rejects the prediction as `"No food / Unknown food"` and disables billing.
-
-### Q7: What is Grad-CAM and what does it show?
-> **Answer:** **Grad-CAM (Gradient-weighted Class Activation Mapping)** calculates the gradients of the target class score with respect to the feature maps of the final convolutional layer. It generates a 2D coarse heatmap highlighting which spatial regions of the image influenced the neural network's decision. It proves our model is looking at the food (e.g. samosa crust) rather than the plate or cafeteria tablecloth.
-
-### Q8: What is ONNX and why convert the PyTorch model to it?
-> **Answer:** **ONNX (Open Neural Network Exchange)** is an open format for representing machine learning models. Exporting PyTorch to ONNX decouples the model from Python/PyTorch dependencies and allows execution in optimized runtimes like ONNX Runtime, OpenVINO, or TensorRT, yielding 1.5x–3x faster CPU inference.
-
-### Q9: What is INT8 Dynamic Quantization?
-> **Answer:** Standard neural network weights use 32-bit floating point numbers (FP32). Dynamic quantization converts weights to 8-bit integers (INT8) during storage and matrix multiplications. This reduces model file size by ~4x (from ~20MB down to ~5MB) and speeds up CPU computation on low-power devices with negligible loss in accuracy (<0.5%).
-
-### Q10: How does your system handle continuous improvement (Active Learning)?
-> **Answer:** The app includes a **"Prediction Wrong?"** human-in-the-loop feedback mechanism. If the cashier or customer sees a wrong prediction, they select the correct dish and click submit. The image is timestamped and saved into `feedback/<true_class>/`. Periodically, these hard examples are merged into the training set for model fine-tuning.
+> **Additional Screenshots**:
+> Drop your captured UI screenshots into `docs/screenshots/` according to [docs/screenshots/README.txt](docs/screenshots/README.txt):
+> - `docs/screenshots/01_single_dish_detection.png` *(Single dish detection view)*
+> - `docs/screenshots/02_multi_item_canteen_bill.png` *(Full bill summary table)*
+> - `docs/screenshots/03_detector_debug_view.png` *(Debug proposal breakdown)*
+> - `docs/screenshots/04_gradcam_explainability.png` *(Grad-CAM heatmap overlay)*
+> - `docs/screenshots/05_live_camera_demo.png` *(OpenCV desktop live HUD)*
 
 ---
 
-## 👥 Section G: Team Work Distribution
+## ⚠️ Known Limitations (Honest Assessment)
 
-| Team Member | Roll No. | Core Responsibilities |
-| :--- | :--- | :--- |
-| **Atharva Korde** | Roll 08 | **Dataset collection & preprocessing:** Downloading Kaggle Indian food dataset, Food-101 subset curation, image integrity verification (PIL), merging & capping at 500 images/class, 70/15/15 split, collecting `not_food` background negative samples. |
-| **Dhruv Khedkar** | Roll 13 | **Model development & training:** Baseline CNN from scratch, MobileNetV3-Large & EfficientNet-B0 transfer learning pipelines for 14 Classes, warmup & fine-tuning learning rate schedules, checkpointing. |
-| **Divyam Sharma** | Roll 14 | **Evaluation, metrics & local dataset:** Top-1/Top-3 benchmarking, Macro-F1 computation, confusion matrix heatmaps, inference latency benchmarks (GPU vs CPU), collecting & evaluating `local_test` canteen photos. |
-| **Divyatwa Kiranpure** | Roll 15 | **Application deployment & live camera:** Streamlit interactive web application with WebRTC, standalone OpenCV GPU live camera demo (`live_demo.py`), shared predictor module (`predictor.py`), running billing table & calorie calculator, Grad-CAM visualization. |
+1. **Limited Class Domain**: The system currently recognizes **14 classes** (13 food dishes + 1 background rejection class). Food items outside these 14 categories cannot be accurately identified and may be rejected as unknown or misclassified.
+2. **Imbalanced Custom Classes**: While Kaggle classes have 300–400 images each, the custom regional classes (`vada_pav` with 60 photos, `poha` with 60 photos, and `not_food` with ~50 photos) have comparatively smaller sample sizes, leading to lower generalization in unusual lighting.
+3. **Overlapping & Touching Items**: The detect-then-classify pipeline relies on region proposals. If two samosas physically overlap significantly or if a dish is obscured by a cup, bounding box separation can merge them or truncate edges, leading to misclassification.
+4. **Single Confidence Threshold**: The system applies a uniform confidence threshold of **60%** (`0.60`) across all dishes. Some visually variable dishes (such as samosas with diverse crust colors or chutneys) can score between 50% and 58% and be rejected unless the threshold is manually lowered.
+5. **Cloud Deployment Resource Constraints**: On the free Streamlit Community Cloud (Debian Linux CPU, ~1 GB RAM), heavyweight YOLO-World models may be automatically switched to lightweight heuristic proposals (`USE_YOLO=0`) to prevent out-of-memory container crashes.
 
 ---
 
-## 🏆 Project Deliverables Checklist (20 Marks)
-- [x] Functional Colab Notebook (`notebooks/capstone_training.ipynb`) with GPU acceleration (14 Classes)
-- [x] 3 Models trained and compared: Baseline CNN vs MobileNetV3 vs EfficientNet-B0
-- [x] 16 Categories: 15 Indian/International food classes + dedicated `not_food` background class
-- [x] Evaluation metrics: Top-1, Top-3, Macro-F1, Confusion Matrix, and Training Curves
-- [x] Interactive Streamlit App (`app/app.py`) with Upload, Webcam Snapshot, and WebRTC Live Camera
-- [x] Standalone OpenCV Live Camera Demo (`app/live_demo.py`) with GPU acceleration, 10-frame smoothing, and hotkeys
-- [x] Shared Predictor Module (`app/predictor.py`) eliminating code duplication
-- [x] Safety Rejection Threshold (<60% confidence alert & `not_food` billing block)
-- [x] Explainable AI (Grad-CAM heatmap expander)
-- [x] ONNX Model Export & Benchmark
-- [x] Active Learning Feedback logger (`feedback/`)
-- [x] Menu rates & nutritional data (`app/menu.csv`)
+## 🔮 Future Work
+
+1. **Custom-Trained Object Detection Backbone**: Replace generic zero-shot YOLO-World proposals with an end-to-end YOLOv8/YOLOv11 model fine-tuned directly on bounding-box-annotated Indian canteen trays.
+2. **Dataset Expansion**: Expand the canteen dataset to 50+ dishes with extensive multi-angle photography captured across multiple campus mess counters.
+3. **Class-Weighted & Focal Loss**: Implement focal loss to mitigate class imbalance between high-volume Kaggle classes and low-volume regional canteen dishes.
+4. **Multi-Dish Partition Trays**: Develop specialized segmentation heuristics for partitioned stainless steel thalis (separating dal, rice, roti, and sabzi into individual compartments).
+5. **Mobile & Edge Device Deployment**: Deploy the quantized 4.23 MB INT8 ONNX model onto Raspberry Pi 5 or Android tablets for standalone, offline edge point-of-sale terminals.
+
+---
+
+## 📜 Capstone Submission ZIP Archive
+
+To build the official submission archive required by the university:
+```powershell
+python scripts/make_submission_zip.py --group-id <YOUR_GROUP_ID>
+```
+*Example: `python scripts/make_submission_zip.py --group-id G12`*
+
+This script automatically verifies that model weights, notebooks, tests, documentation, and requirements are included while strictly excluding virtual environments, Git caches, bytecode, and raw datasets.
+
+---
+
+## 🤝 Acknowledgements
+
+- **Department of Electronics Engineering, Ramdeobaba University (RBU)** for project guidance and lab infrastructure.
+- **Kaggle** for providing free NVIDIA Tesla T4 GPU compute.
+- **Kaggle Contributor `l33tc0d3r`** for the public [Indian Food Classification dataset](https://www.kaggle.com/datasets/l33tc0d3r/indian-food-classification).
+- **Ultralytics** for YOLO-World open-vocabulary vision architectures.

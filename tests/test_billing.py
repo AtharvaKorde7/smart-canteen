@@ -1,12 +1,23 @@
 """
-Unit tests for app/billing.py
-Smart Canteen Billing Assistant
+Smart Canteen Billing Assistant: Billing Unit Tests (tests/test_billing.py)
+===========================================================================
 
-Test Acceptance Criteria:
-1. 2x samosa (20 Rs, 250 kcal) gives Qty 2, Rs 40, 500 kcal.
-2. samosa + chai (10 Rs, 20 kcal) gives Qty 2, Rs 30, 270 kcal.
-3. not_food is properly excluded from the bill.
-4. Receipts and CSV exports format correctly.
+Purpose:
+--------
+Automated test suite verifying the arithmetic correctness and business logic
+of the canteen billing engine (`app/billing.py`).
+
+Verification Scope:
+-------------------
+1. Quantity Multipliers: 2x samosa (20 Rs, 250 kcal) -> Qty 2, Rs 40, 500 kcal.
+2. Multi-Item Aggregation: samosa + chai -> Qty 2, Rs 30, 270 kcal across 2 distinct lines.
+3. Financial Protection: 'not_food' background detections are strictly ignored and not billed.
+4. Incremental Bill Merging: Correctly merges new detections into existing running tabs.
+5. Export Formatting: Validates ASCII thermal print layout and RFC 4180 CSV generation.
+
+Usage:
+------
+    python tests/test_billing.py
 """
 
 import sys
@@ -23,7 +34,7 @@ if str(APP_DIR) not in sys.path:
     sys.path.append(str(APP_DIR))
 
 try:
-    from billing import (
+    from app.billing import (
         aggregate_detections,
         merge_into_bill,
         generate_receipt_text,
@@ -39,45 +50,51 @@ except ImportError:
 
 
 def test_two_samosas():
-    """Test 1: 2x samosa (20 Rs, 250 kcal) gives Qty 2, Rs 40, 500 kcal."""
+    """
+    Test 1: Verifies quantity aggregation for multiple instances of the same dish.
+    Asserts: 2x samosa (Rs 20, 250 kcal each) yields Qty 2, Rs 40 total, 500 kcal total.
+    """
     fake_menu = pd.DataFrame([
         {"class": "samosa", "price": 20, "kcal": 250},
         {"class": "chai", "price": 10, "kcal": 20},
     ])
 
-    # Two detections of samosa
+    # Two distinct detections of samosa
     detections = [
         {"class_raw": "samosa", "class_name": "Samosa", "confidence": 0.88},
-        {"class_raw": "samosa", "class_name": "Samosa", "confidence": 0.91},
+        {"class_raw": "samosa", "class_name": "Samosa", "confidence": 0.92},
     ]
 
     result = aggregate_detections(detections, menu_df=fake_menu)
 
-    assert result["total_qty"] == 2, f"Expected Qty 2, got {result['total_qty']}"
-    assert result["total_price"] == 40, f"Expected Rs 40, got {result['total_price']}"
-    assert result["total_kcal"] == 500, f"Expected 500 kcal, got {result['total_kcal']}"
+    assert result["total_qty"] == 2, f"Expected total Qty 2, got {result['total_qty']}"
+    assert result["total_price"] == 40, f"Expected total Rs 40, got {result['total_price']}"
+    assert result["total_kcal"] == 500, f"Expected total 500 kcal, got {result['total_kcal']}"
+    assert len(result["items"]) == 1, "Expected single consolidated line item for samosa"
 
-    items = result["items"]
-    assert len(items) == 1
-    assert items[0]["class"] == "samosa"
-    assert items[0]["qty"] == 2
-    assert items[0]["price"] == 20
-    assert items[0]["total_price"] == 40
-    assert items[0]["kcal"] == 250
-    assert items[0]["total_kcal"] == 500
+    item = result["items"][0]
+    assert item["class"] == "samosa"
+    assert item["qty"] == 2
+    assert item["price"] == 20
+    assert item["kcal"] == 250
+    assert item["total_price"] == 40
+    assert item["total_kcal"] == 500
     print("[PASS] test_two_samosas: 2x samosa gives Qty 2, Rs 40, 500 kcal.")
 
 
 def test_samosa_plus_chai():
-    """Test 2: samosa + chai (samosa: 20 Rs, 250 kcal; chai: 10 Rs, 20 kcal) gives Qty 2, Rs 30, 270 kcal."""
+    """
+    Test 2: Verifies multi-item aggregation for different dishes on the same tray.
+    Asserts: samosa (Rs 20, 250 kcal) + chai (Rs 10, 20 kcal) yields Qty 2, Rs 30 total, 270 kcal total.
+    """
     fake_menu = pd.DataFrame([
         {"class": "samosa", "price": 20, "kcal": 250},
         {"class": "chai", "price": 10, "kcal": 20},
     ])
 
     detections = [
-        {"class_raw": "samosa", "class_name": "Samosa", "confidence": 0.92},
-        {"class_raw": "chai", "class_name": "Chai", "confidence": 0.85},
+        {"class_raw": "samosa", "class_name": "Samosa", "confidence": 0.85},
+        {"class_raw": "chai", "class_name": "Chai", "confidence": 0.94},
     ]
 
     result = aggregate_detections(detections, menu_df=fake_menu)
@@ -100,7 +117,10 @@ def test_samosa_plus_chai():
 
 
 def test_not_food_excluded():
-    """Test 3: 'not_food' is properly ignored and not billed."""
+    """
+    Test 3: Financial safety rejection test.
+    Asserts: 'not_food' background detections (empty tables, trays, cutlery) are completely excluded from the bill.
+    """
     fake_menu = pd.DataFrame([
         {"class": "samosa", "price": 20, "kcal": 250},
         {"class": "not_food", "price": 0, "kcal": 0},
@@ -120,7 +140,10 @@ def test_not_food_excluded():
 
 
 def test_merge_into_bill():
-    """Test 4: Merging items updates quantities and recalculates totals correctly."""
+    """
+    Test 4: Cashier workflow verification.
+    Asserts: Merging newly scanned items increments quantities for existing dishes and creates new lines for new dishes.
+    """
     bill = [
         {"class": "samosa", "name": "Samosa", "qty": 1, "price": 20, "kcal": 250, "total_price": 20, "total_kcal": 250}
     ]
@@ -145,7 +168,10 @@ def test_merge_into_bill():
 
 
 def test_receipt_generation():
-    """Test 5: Receipt text and CSV export generation."""
+    """
+    Test 5: Receipt export formatting test.
+    Asserts: Text format creates correct ASCII thermal layout and CSV format generates standard tabular records.
+    """
     bill = [
         {"class": "samosa", "name": "Samosa", "qty": 2, "price": 20, "kcal": 250, "total_price": 40, "total_kcal": 500},
         {"class": "chai", "name": "Chai", "qty": 1, "price": 15, "kcal": 80, "total_price": 15, "total_kcal": 80}
@@ -160,10 +186,18 @@ def test_receipt_generation():
     print("[PASS] test_receipt_generation: Text and CSV receipts generated correctly.")
 
 
-if __name__ == "__main__":
+def main():
+    """Runs all billing unit test cases."""
+    print("=" * 60)
+    print("RUNNING SMART CANTEEN BILLING UNIT TESTS")
+    print("=" * 60)
     test_two_samosas()
     test_samosa_plus_chai()
     test_not_food_excluded()
     test_merge_into_bill()
     test_receipt_generation()
-    print("\n[ALL TESTS PASSED] All billing unit tests completed successfully!")
+    print("\n[ALL TESTS PASSED] All billing unit tests completed successfully!\n")
+
+
+if __name__ == "__main__":
+    main()

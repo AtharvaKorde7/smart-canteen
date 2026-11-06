@@ -11,7 +11,8 @@ ENV/
 
 # Datasets and archives
 data/
-dataset*
+dataset/
+dataset_split/
 *.zip
 indian_raw/
 food-101/
@@ -27,14 +28,17 @@ __pycache__/
 feedback/
 !feedback/.gitkeep
 
-# Model weights and exports
-models/*.pth
-models/*.onnx
-app/model/*.onnx
+# Model weights and exports (Ultralytics auto-downloads & generic models)
+models/
 *.pt
 *.onnx
 
-# Application runtime outputs and screenshots
+# Explicitly ensure production app model artifacts are tracked
+!app/model/mobilenetv3.pth
+!app/model/classes.json
+!app/model/README.txt
+
+# Application runtime outputs and temp files
 outputs/
 
 # OS files

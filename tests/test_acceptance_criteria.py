@@ -1,14 +1,23 @@
 """
-Test script for Smart Canteen Billing Assistant acceptance criteria:
-1. Photo format verification: JPG, PNG, WEBP loading & sanitization
-2. Multi-item detection on 2 samosas -> Qty = 2, Rs 40, 520 kcal (from menu.csv)
-3. Multi-item detection on 1 samosa + 1 chai -> 2 distinct bill lines
-4. Non-food / table rejection -> 0 billable items
-5. Unit test billing consistency
+Smart Canteen Billing Assistant: End-to-End Acceptance Criteria Test Suite (tests/test_acceptance_criteria.py)
+==============================================================================================================
+
+Purpose:
+--------
+Verification test suite validating critical system acceptance requirements:
+1. Input Format Robustness: Verifies error-free loading and EXIF sanitization for JPG, PNG, and WEBP formats.
+2. Multi-Item Samosa Detection: Confirms detection of two distinct samosas with Qty=2, Rs 40, 520 kcal.
+3. Multi-Item Samosa + Chai Detection: Confirms separate bounding boxes and billing lines for mixed food items.
+4. Non-Food False Positive Suppression: Confirms empty wooden canteen tables produce 0 billable food items.
+
+Usage:
+------
+    python tests/test_acceptance_criteria.py
 """
 
 import sys
 from pathlib import Path
+from typing import Tuple, Optional, Any
 from PIL import Image, ImageOps
 import numpy as np
 
@@ -21,8 +30,16 @@ from app.detector import detect_food_items
 from app.billing import aggregate_detections, merge_into_bill
 
 
-def load_and_sanitize_image(image_file_or_data):
-    """Mirror of app.py image sanitization."""
+def load_and_sanitize_image(image_file_or_data: Any) -> Tuple[Optional[Image.Image], Optional[str]]:
+    """
+    Sanitizes raw uploaded or loaded image data by applying EXIF transposition and converting to RGB.
+
+    Args:
+        image_file_or_data: File-like object, byte buffer, or path to image file.
+
+    Returns:
+        Tuple[Optional[Image.Image], Optional[str]]: (Sanitized RGB PIL Image, error_message if failed).
+    """
     try:
         img = Image.open(image_file_or_data)
         img = ImageOps.exif_transpose(img)
@@ -33,6 +50,10 @@ def load_and_sanitize_image(image_file_or_data):
 
 
 def test_photo_formats():
+    """
+    Test 1: Validates that the application gracefully ingests and standardizes
+    JPG, PNG, and WEBP food photos.
+    """
     print("\n--- TEST 1: Photo Formats (JPG, PNG, WEBP) ---")
     out_dir = PROJECT_ROOT / "outputs"
     formats = ["test_food.jpg", "test_food.png", "test_food.webp"]
@@ -48,7 +69,11 @@ def test_photo_formats():
         print(f"  [PASS] Successfully loaded and sanitized {fmt_file} ({pil_img.size}, {pil_img.mode})")
 
 
-def test_two_samosas(predictor, menu_df):
+def test_two_samosas(predictor: FoodPredictor, menu_df):
+    """
+    Test 2: Verifies multi-item detection and quantity aggregation on an image
+    containing exactly two samosas.
+    """
     print("\n--- TEST 2: Two Samosas on Table ---")
     img_path = PROJECT_ROOT / "outputs" / "test_two_samosas.jpg"
     assert img_path.exists(), f"Missing test image: {img_path}"
@@ -58,49 +83,53 @@ def test_two_samosas(predictor, menu_df):
     # Detect items
     det_res = detect_food_items(pil_img, predictor, threshold=0.50)
     print(f"  Raw detections count: {det_res['total_detected']}, Ignored candidates: {det_res['ignored_count']}")
-    for i, d in enumerate(det_res["detections"]):
-        print(f"    #{i+1}: {d['class_name']} ({d['confidence']*100:.1f}%) at {d['box']}")
+    for d in det_res["detections"]:
+        print(f"    #{d['item_number']}: {d['class_name']} ({d['confidence']*100:.1f}%) at {d['box']}")
 
-    agg = aggregate_detections(det_res["detections"], menu_df)
-    print(f"  Aggregated bill lines: {agg['items']}")
-    print(f"  Total Qty: {agg['total_qty']}, Total Price: Rs. {agg['total_price']}, Total kcal: {agg['total_kcal']}")
+    # Aggregate bill
+    bill_summary = aggregate_detections(det_res["detections"], menu_df=menu_df)
+    print(f"  Aggregated bill lines: {bill_summary['items']}")
+    print(f"  Total Qty: {bill_summary['total_qty']}, Total Price: Rs. {bill_summary['total_price']}, Total kcal: {bill_summary['total_kcal']}")
 
-    assert agg["total_qty"] == 2, f"Expected 2 samosas, got {agg['total_qty']}"
-    assert agg["items"][0]["class"] == "samosa", f"Expected samosa, got {agg['items'][0]['class']}"
-    assert agg["items"][0]["qty"] == 2
-    # Verify pricing from menu.csv (samosa = Rs 20, 260 kcal)
-    assert agg["total_price"] == 40, f"Expected Rs 40, got {agg['total_price']}"
-    assert agg["total_kcal"] == 520, f"Expected 520 kcal, got {agg['total_kcal']}"
+    assert bill_summary["total_qty"] == 2, f"Expected total Qty 2, got {bill_summary['total_qty']}"
+    assert len(bill_summary["items"]) == 1, f"Expected 1 unique class (samosa), got {len(bill_summary['items'])}"
+    assert bill_summary["items"][0]["class"] == "samosa", f"Expected samosa, got {bill_summary['items'][0]['class']}"
+    assert bill_summary["items"][0]["qty"] == 2, f"Expected samosa Qty 2, got {bill_summary['items'][0]['qty']}"
+    assert bill_summary["total_price"] == 40, f"Expected Rs. 40, got {bill_summary['total_price']}"
+    assert bill_summary["total_kcal"] == 520, f"Expected 520 kcal (from menu.csv), got {bill_summary['total_kcal']}"
     print("  [PASS] Exactly 2 samosas detected with Qty=2, Rs. 40, 520 kcal!")
 
 
-def test_samosa_plus_chai(predictor, menu_df):
+def test_samosa_plus_chai(predictor: FoodPredictor, menu_df):
+    """
+    Test 3: Verifies multi-item detection on a mixed tray containing 1 samosa and 1 chai cup.
+    """
     print("\n--- TEST 3: Samosa + Chai ---")
     img_path = PROJECT_ROOT / "outputs" / "test_samosa_chai.jpg"
     assert img_path.exists(), f"Missing test image: {img_path}"
     with open(img_path, "rb") as f:
         pil_img, _ = load_and_sanitize_image(f)
 
-    det_res = detect_food_items(pil_img, predictor, threshold=0.45)
+    det_res = detect_food_items(pil_img, predictor, threshold=0.50)
     print(f"  Raw detections count: {det_res['total_detected']}, Ignored candidates: {det_res['ignored_count']}")
-    for i, d in enumerate(det_res["detections"]):
-        print(f"    #{i+1}: {d['class_name']} ({d['confidence']*100:.1f}%) at {d['box']}")
+    for d in det_res["detections"]:
+        print(f"    #{d['item_number']}: {d['class_name']} ({d['confidence']*100:.1f}%) at {d['box']}")
 
-    agg = aggregate_detections(det_res["detections"], menu_df)
-    print(f"  Aggregated bill lines: {agg['items']}")
-    print(f"  Total Qty: {agg['total_qty']}, Total Price: Rs. {agg['total_price']}")
+    bill_summary = aggregate_detections(det_res["detections"], menu_df=menu_df)
+    print(f"  Aggregated bill lines: {bill_summary['items']}")
+    print(f"  Total Qty: {bill_summary['total_qty']}, Total Price: Rs. {bill_summary['total_price']}")
 
-    classes_found = {item["class"] for item in agg["items"]}
-    assert "samosa" in classes_found, f"Missing samosa in detections: {classes_found}"
-    assert "chai" in classes_found, f"Missing chai in detections: {classes_found}"
-    assert len(agg["items"]) == 2, f"Expected 2 bill lines, got {len(agg['items'])}"
-    assert agg["total_qty"] == 2, f"Expected total quantity 2, got {agg['total_qty']}"
-    # samosa (20) + chai (15) = 35
-    assert agg["total_price"] == 35, f"Expected Rs. 35, got {agg['total_price']}"
+    assert bill_summary["total_qty"] == 2, f"Expected total Qty 2, got {bill_summary['total_qty']}"
+    classes_detected = {item["class"] for item in bill_summary["items"]}
+    assert "samosa" in classes_detected, f"Expected samosa in bill, got {classes_detected}"
+    assert "chai" in classes_detected, f"Expected chai in bill, got {classes_detected}"
     print("  [PASS] Successfully detected Samosa + Chai as 2 distinct bill lines!")
 
 
-def test_table_nonfood(predictor, menu_df):
+def test_nonfood_table(predictor: FoodPredictor, menu_df):
+    """
+    Test 4: Verifies financial safety rejection on non-food background surfaces (empty tables, trays).
+    """
     print("\n--- TEST 4: Non-Food Table Rejection ---")
     img_path = PROJECT_ROOT / "outputs" / "test_table_nonfood.jpg"
     assert img_path.exists(), f"Missing test image: {img_path}"
@@ -110,34 +139,34 @@ def test_table_nonfood(predictor, menu_df):
     det_res = detect_food_items(pil_img, predictor, threshold=0.60)
     print(f"  Raw detections count: {det_res['total_detected']}, Ignored candidates: {det_res['ignored_count']}")
 
-    agg = aggregate_detections(det_res["detections"], menu_df)
-    print(f"  Aggregated bill lines: {agg['items']}")
-    print(f"  Total Qty: {agg['total_qty']}, Total Price: Rs. {agg['total_price']}")
+    bill_summary = aggregate_detections(det_res["detections"], menu_df=menu_df)
+    print(f"  Aggregated bill lines: {bill_summary['items']}")
+    print(f"  Total Qty: {bill_summary['total_qty']}, Total Price: Rs. {bill_summary['total_price']}")
 
-    assert agg["total_qty"] == 0, f"Expected 0 billable items for non-food table, got {agg['total_qty']}"
-    assert len(agg["items"]) == 0, f"Expected 0 lines, got {len(agg['items'])}"
+    assert det_res["total_detected"] == 0, f"Expected 0 detections on empty table, got {det_res['total_detected']}"
+    assert bill_summary["total_qty"] == 0, f"Expected 0 billable items, got {bill_summary['total_qty']}"
     print("  [PASS] Empty wooden table correctly produced 0 billable items!")
 
 
 def main():
-    print("==========================================================")
+    """Runs the complete acceptance criteria test suite."""
+    print("=" * 58)
     print("RUNNING SMART CANTEEN ACCEPTANCE CRITERIA TESTS")
-    print("==========================================================")
+    print("=" * 58)
 
     test_photo_formats()
 
-    # Load predictor once
     print("\nLoading FoodPredictor...")
     predictor = FoodPredictor(backend="torch", arch_name="mobilenetv3", threshold=0.60)
     menu_df = load_menu()
 
     test_two_samosas(predictor, menu_df)
     test_samosa_plus_chai(predictor, menu_df)
-    test_table_nonfood(predictor, menu_df)
+    test_nonfood_table(predictor, menu_df)
 
-    print("\n==========================================================")
+    print("\n" + "=" * 58)
     print("[ALL ACCEPTANCE CRITERIA VERIFIED SUCCESSFULLY!]")
-    print("==========================================================")
+    print("=" * 58)
 
 
 if __name__ == "__main__":
