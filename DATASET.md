@@ -64,8 +64,7 @@ The Kaggle archive contains multi-word folder names that are normalized to snake
 To support regional campus canteen favourites (`vada_pav`, `poha`) and reject non-food background clutter (`not_food`), the team gathered custom photos.
 
 ### Provenance & Attribution
-> **TODO [FOR TEAM MEMBERS - ATHARVA / DHRUV / DIVYAM / DIVYATWA]**:
-> State precisely where each set of custom photos was obtained (e.g. photos taken with smartphone camera at Ramdeobaba University canteen, campus cafeteria tables, hostel mess counters; note if any web-scraped or Creative Commons photos were used for augmenting low-count classes, and cite sources honestly).
+The photos for the classes `vada_pav`, `poha`, and `not_food` were taken by our team in the college canteen and the nearby area. All other classes originate from the public Kaggle Indian Food Classification dataset described above.
 
 ### Own Photos Structure:
 ```text

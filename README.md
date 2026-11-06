@@ -163,6 +163,16 @@ While EfficientNet-B0 achieved identical Top-1 accuracy (93.71%), MobileNetV3-La
 
 *Figure 7: Detector debug view showing accepted and rejected candidate boxes.*
 
+### Application Screenshots
+
+![Single Dish Detection Rejection](docs/screenshots/single_dish_detection.png)
+
+*Figure 8: Streamlit application interface demonstrating non-food rejection on an empty plate with cutlery and sauce residue; the safety filter reports 0 items detected and confirms candidate regions were classified as not_food or fell below the 60% confidence threshold.*
+
+![Grad-CAM Application Heatmap](docs/screenshots/single_dish_detection_heatmap.png)
+
+*Figure 9: Streamlit Explainable AI expander displaying the Grad-CAM activation heatmap overlay concentrated on the fork prongs on the plate. Grad-CAM is a qualitative visualization of regions influencing the prediction, not a proof of correctness.*
+
 > **Note on Sample Photos**:  
 > The two sample photos are stock images used only for testing; they are not part of the training data. Results on individual photos are examples, not an accuracy measure. The measured test accuracy is 93.71% (top-1) on 572 held-out images of single dishes.
 
@@ -217,6 +227,8 @@ smart-canteen/
 │   │   └── training_curves.png        # Training loss & accuracy curves
 │   └── screenshots/                   # Sample application interface screenshots
 │       ├── chai_samosa_success.png    # Live cashier detection capture
+│       ├── single_dish_detection.png  # Non-food plate rejection in Streamlit UI
+│       ├── single_dish_detection_heatmap.png # Grad-CAM activation heatmap overlay in UI
 │       └── README.txt                 # Screenshot guide & list of missing shots
 │
 ├── feedback/                          # Active learning cashier feedback directory
